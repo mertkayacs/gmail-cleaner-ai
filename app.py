@@ -83,12 +83,65 @@ def write_list_file(path, header, df):
 
 st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="wide")
 
-st.sidebar.title("gmail-cleaner-ai")
+# Header
+st.title(":mailbox: gmail-cleaner-ai")
+st.markdown(
+    "**Clean up multiple Gmail accounts with whichever LLM you trust.** "
+    "Open source, MIT licensed. "
+    "[GitHub](https://github.com/mertkayacs/gmail-cleaner-ai)"
+)
+
+# Setup status (always visible; expanded when nothing is configured)
 accounts = list_accounts()
+provider_keys = {
+    "Anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
+    "OpenAI / OpenAI-compatible": bool(os.environ.get("OPENAI_API_KEY")),
+    "Gemini": bool(os.environ.get("GOOGLE_API_KEY")),
+}
+
+with st.expander("Setup status", expanded=not accounts):
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        st.markdown("**Gmail accounts**")
+        if accounts:
+            for a in accounts:
+                st.markdown(f"- :white_check_mark: `{a}`")
+        else:
+            st.markdown("- :x: none configured")
+    with col_b:
+        st.markdown("**LLM provider keys**")
+        for name, present in provider_keys.items():
+            mark = ":white_check_mark:" if present else ":x:"
+            st.markdown(f"- {mark} {name}")
+        st.markdown("- :information_source: Ollama (local, no key required)")
+
+# First-time setup view, shown only when no accounts are configured.
 if not accounts:
-    st.sidebar.error("No accounts in .env. Copy .env.example to .env and fill in.")
+    st.markdown("---")
+    st.subheader("First-time setup")
+    st.markdown(
+        """
+Two things to set up. Both go in a `.env` file in the project root.
+
+**1. Gmail App Password** (per account, ~30 sec each)
+- Visit [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) (requires 2-Step Verification on the Gmail account)
+- Generate one named "gmail-cleaner-ai" and copy the 16-character password
+- Add to `.env` as `GMAIL_ACCOUNT_n` and `GMAIL_APPPASS_n` (n=1, 2, 3...)
+
+**2. LLM API key** (pick any one)
+- **Anthropic** (Claude): [console.anthropic.com](https://console.anthropic.com), set `ANTHROPIC_API_KEY`
+- **OpenAI** (GPT): [platform.openai.com](https://platform.openai.com), set `OPENAI_API_KEY`
+- **Gemini** (Google): [aistudio.google.com/apikey](https://aistudio.google.com/apikey), set `GOOGLE_API_KEY`
+- **Ollama** (open-source models, local): install from [ollama.com](https://ollama.com), no key
+- **Any OpenAI-compatible API** (OpenRouter, Together AI, Groq, Mistral, vLLM, LM Studio, llama.cpp): set `LLM_PROVIDER=openai` plus `LLM_BASE_URL=<endpoint>` and put that provider's key in `OPENAI_API_KEY`
+
+After saving `.env`, refresh this page.
+        """
+    )
+    st.markdown("Source: [github.com/mertkayacs/gmail-cleaner-ai](https://github.com/mertkayacs/gmail-cleaner-ai)")
     st.stop()
 
+# Sidebar (only reached when at least one account is configured)
 account = st.sidebar.selectbox("Account", accounts)
 
 st.sidebar.markdown("---")

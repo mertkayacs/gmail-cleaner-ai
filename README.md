@@ -87,6 +87,20 @@ Prereqs: Python 3.10+, an LLM provider key (or Ollama locally), and Gmail App Pa
 
 ## How to customize
 
+### Built-in providers
+
+| Provider | `LLM_PROVIDER` | Notes |
+|---|---|---|
+| Anthropic | `anthropic` | Claude family |
+| OpenAI | `openai` | GPT family |
+| Gemini | `gemini` | Google models |
+| Ollama | `ollama` | Local open-source models, no API key |
+| **Any OpenAI-compatible API** | `openai` + `LLM_BASE_URL=<endpoint>` | OpenRouter, Together AI, Groq, Mistral, vLLM, LM Studio, llama.cpp server, etc. Put that provider's key in `OPENAI_API_KEY`. |
+
+That covers most LLMs in use today. If you find one that needs custom logic, add it as below.
+
+### Add a custom provider
+
 **Add an LLM provider** in 10 lines. Implement a class extending `Classifier` in `lib/classifier.py`, register it in `PROVIDERS`, document the env vars in `.env.example`.
 
 ```python

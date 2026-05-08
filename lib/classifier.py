@@ -63,23 +63,31 @@ class AnthropicClassifier(Classifier):
 
 
 class OpenAIClassifier(Classifier):
-    """GPT via OpenAI API. Requires OPENAI_API_KEY."""
+    """OpenAI-compatible API. Covers OpenAI itself plus OpenRouter, Together AI,
+    Groq, Mistral, vLLM, LM Studio, llama.cpp server, and any other endpoint
+    that speaks the OpenAI Chat Completions API. Set LLM_BASE_URL to point at
+    the provider's endpoint; OPENAI_API_KEY holds that provider's key."""
 
     DEFAULT_MODEL = "gpt-4o"
 
-    def __init__(self, model=None, api_key=None):
+    def __init__(self, model=None, api_key=None, base_url=None):
         from openai import OpenAI
         key = api_key or os.environ.get("OPENAI_API_KEY")
         if not key:
             raise RuntimeError("OPENAI_API_KEY missing")
-        self.client = OpenAI(api_key=key)
+        url = base_url or os.environ.get("LLM_BASE_URL")
+        kwargs = {"api_key": key}
+        if url:
+            kwargs["base_url"] = url
+        self.client = OpenAI(**kwargs)
         self.model = model or self.DEFAULT_MODEL
 
     def classify_batch(self, prompt):
+        # response_format json_object is OpenAI-only; non-OpenAI providers may not
+        # support it. The prompt asks for JSON and _extract_json is tolerant.
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
         )
         return _extract_json(resp.choices[0].message.content or "")
 
