@@ -564,6 +564,37 @@ with st.container(border=True):
             hide_index=True,
         )
 
+    # ---- Reset path ----
+    # Common operation when re-running classification with a different model
+    # or after editing prompts. Leaves applied.log alone so the audit trail
+    # survives a reset.
+    _data_exists = (
+        inv_path.exists()
+        or cats_path.exists()
+        or allowed_path.exists()
+        or disallowed_path.exists()
+        or xml_path.exists()
+    )
+    if _data_exists:
+        with st.expander("Reset data for this account"):
+            st.caption(
+                f"Deletes inventory, classification, allowed/disallowed lists, and "
+                f"filters.xml for `{account}`. The audit log (applied.log) is preserved."
+            )
+            confirm_reset = st.checkbox(
+                "I understand this clears my classification data",
+                key=f"confirm_reset_{account}",
+            )
+            if st.button(
+                "Clear data",
+                disabled=not confirm_reset,
+                key=f"btn_reset_{account}",
+            ):
+                for _p in (inv_path, cats_path, allowed_path, disallowed_path, xml_path):
+                    _p.unlink(missing_ok=True)
+                st.success("Cleared.")
+                st.rerun()
+
 
 # ============== Card 3: Review ==============
 
