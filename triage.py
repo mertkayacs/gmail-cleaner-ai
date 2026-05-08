@@ -35,8 +35,7 @@ from pathlib import Path
 # so that `triage.py --help` works without installing deps first.
 
 DATA_DIR = Path(__file__).parent / "data"
-MODEL = "claude-opus-4-7"
-SENDER_BATCH_SIZE = 50          # senders per Claude classification call
+SENDER_BATCH_SIZE = 50          # senders per classification call
 TOP_SENDER_CAP = 200            # only classify top N senders by volume
 FETCH_BATCH_SIZE = 500          # IMAP fetch chunk size
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
@@ -250,16 +249,11 @@ def cmd_analyze(account_email):
     top_senders = inventory["top_senders"]
     samples = inventory.get("sample_subjects", {})
 
-    import anthropic
     from dotenv import load_dotenv
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        load_dotenv(Path(__file__).parent / ".env")
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise SystemExit("ANTHROPIC_API_KEY missing in environment or .env")
-
-    client = anthropic.Anthropic(api_key=api_key)
+    load_dotenv(Path(__file__).parent / ".env")
+    from lib.classifier import get_classifier
+    classifier = get_classifier()
+    print(f"Using {type(classifier).__name__} (model={classifier.model})")
 
     all_classifications = {}
     n_batches = (len(top_senders) + SENDER_BATCH_SIZE - 1) // SENDER_BATCH_SIZE
@@ -268,24 +262,11 @@ def cmd_analyze(account_email):
         print(f"Classifying batch {i // SENDER_BATCH_SIZE + 1}/{n_batches} "
               f"({len(batch)} senders)...")
         prompt = build_classification_prompt(batch, samples)
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(block.text for block in resp.content if hasattr(block, "text"))
         try:
-            classifications = json.loads(text)
-        except json.JSONDecodeError:
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if not m:
-                print(f"  Could not parse JSON from response: {text[:200]}")
-                continue
-            try:
-                classifications = json.loads(m.group())
-            except json.JSONDecodeError as e:
-                print(f"  Could not parse JSON after extraction: {e}")
-                continue
+            classifications = classifier.classify_batch(prompt)
+        except Exception as e:
+            print(f"  Classifier error: {e}")
+            continue
         all_classifications.update(classifications)
 
     by_category = defaultdict(list)
