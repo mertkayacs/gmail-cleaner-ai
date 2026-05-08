@@ -230,16 +230,9 @@ ALL_KEY_VARS = [
 ]
 keys_count = sum(1 for v in ALL_KEY_VARS if os.environ.get(v))
 
-# Compact status sentence. No emoji, no metric tiles.
-if accounts and keys_count:
-    status_msg = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''} configured. {keys_count} provider key{'s' if keys_count != 1 else ''} set. Ready."
-elif accounts:
-    status_msg = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''} configured. No provider key yet."
-elif keys_count:
-    status_msg = f"No Gmail account yet. {keys_count} provider key{'s' if keys_count != 1 else ''} set."
-else:
-    status_msg = "Add a Gmail App Password and an LLM key below to begin."
-st.caption(status_msg)
+# Status sentence reflects the SELECTED preset's key (computed below in Setup),
+# not a global tally. Set later, render at top via a placeholder.
+status_placeholder_top = st.empty()
 
 
 # ============== Card 1: Setup ==============
@@ -260,7 +253,7 @@ with st.container(border=True):
                     remove_env_keys([f"GMAIL_ACCOUNT_{slot}", f"GMAIL_APPPASS_{slot}"])
                     st.rerun()
 
-        with st.form("add_acc_form", clear_on_submit=True):
+        with st.form("add_acc_form", clear_on_submit=True, border=False):
             st.caption(
                 "Generate an App Password at [myaccount.google.com/apppasswords]"
                 "(https://myaccount.google.com/apppasswords). Requires 2-Step Verification. "
@@ -331,7 +324,7 @@ with st.container(border=True):
                 if url:
                     msg += f". Get one at [{url}]({url})."
                 st.markdown(msg)
-            with st.form(f"set_key_form_{key_var}", clear_on_submit=True):
+            with st.form(f"set_key_form_{key_var}", clear_on_submit=True, border=False):
                 new_key = st.text_input(
                     f"Paste {key_var}",
                     type="password",
@@ -362,6 +355,20 @@ with st.container(border=True):
         with adv3:
             fetch_batch_size = st.number_input("IMAP fetch batch size", min_value=50, max_value=2000, value=500, step=50)
 
+
+# Status reflects what's needed for the SELECTED preset, not a global tally.
+selected_key_set = (key_var is None) or bool(os.environ.get(key_var))  # ollama has no key_var
+if accounts and selected_key_set:
+    top_status = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, {preset_name} ready."
+elif accounts and key_var:
+    top_status = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, {key_var} not set yet."
+elif accounts:
+    top_status = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, no provider key yet."
+elif selected_key_set:
+    top_status = f"{preset_name} ready. Add a Gmail account below to begin."
+else:
+    top_status = "Add a Gmail App Password and an LLM key below to begin."
+status_placeholder_top.caption(top_status)
 
 # Persist runtime settings to session
 st.session_state["LLM_MODEL"] = model
