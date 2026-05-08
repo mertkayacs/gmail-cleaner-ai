@@ -206,7 +206,20 @@ PRESETS = {
 
 st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="wide")
 
-st.title(":mailbox: gmail-cleaner-ai")
+st.markdown(
+    "<h1 style='font-family: monospace; font-weight: 600; margin-bottom: 0;'>"
+    "gmail-cleaner-ai"
+    "</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<p style='color: #6b6357; margin-top: 4px;'>"
+    "Sender-level Gmail cleanup. IMAP read, LLM classify, label, trash. "
+    "BYOK, MIT, "
+    "<a href='https://github.com/mertkayacs/gmail-cleaner-ai' style='color: #b85c00;'>github</a>."
+    "</p>",
+    unsafe_allow_html=True,
+)
 
 accounts_full = list_accounts()
 accounts = [email for _, email in accounts_full]
@@ -217,21 +230,22 @@ ALL_KEY_VARS = [
 ]
 keys_count = sum(1 for v in ALL_KEY_VARS if os.environ.get(v))
 
-# Status pill (one-line)
-acc_mark = ":white_check_mark:" if accounts else ":x:"
-key_mark = ":white_check_mark:" if keys_count else ":x:"
-st.markdown(
-    f"{acc_mark} {len(accounts)} Gmail "
-    f"&nbsp; · &nbsp; {key_mark} {keys_count} provider key{'s' if keys_count != 1 else ''} set "
-    f"&nbsp; · &nbsp; [GitHub](https://github.com/mertkayacs/gmail-cleaner-ai) "
-    f"&nbsp; · &nbsp; MIT"
-)
+# Compact status sentence. No emoji, no metric tiles.
+if accounts and keys_count:
+    status_msg = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''} configured. {keys_count} provider key{'s' if keys_count != 1 else ''} set. Ready."
+elif accounts:
+    status_msg = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''} configured. No provider key yet."
+elif keys_count:
+    status_msg = f"No Gmail account yet. {keys_count} provider key{'s' if keys_count != 1 else ''} set."
+else:
+    status_msg = "Add a Gmail App Password and an LLM key below to begin."
+st.caption(status_msg)
 
 
 # ============== Card 1: Setup ==============
 
 with st.container(border=True):
-    st.subheader("1. Setup")
+    st.subheader("Setup")
     setup_col_acc, setup_col_llm = st.columns(2)
 
     # ---- Gmail accounts ----
@@ -241,7 +255,7 @@ with st.container(border=True):
         if accounts_full:
             for slot, email in accounts_full:
                 cols = st.columns([5, 1])
-                cols[0].markdown(f":white_check_mark: `{email}`")
+                cols[0].markdown(f"`{email}`")
                 if cols[1].button("Remove", key=f"rm_acc_{slot}"):
                     remove_env_keys([f"GMAIL_ACCOUNT_{slot}", f"GMAIL_APPPASS_{slot}"])
                     st.rerun()
@@ -310,12 +324,12 @@ with st.container(border=True):
             existing_key = os.environ.get(key_var, "")
             if existing_key:
                 masked = (existing_key[:6] + "…" + existing_key[-4:]) if len(existing_key) > 12 else "set"
-                st.markdown(f":white_check_mark: `{key_var}` set ({masked})")
+                st.markdown(f"`{key_var}` set ({masked})")
             else:
                 url = preset.get("key_url")
-                msg = f":x: `{key_var}` not set"
+                msg = f"`{key_var}` not set"
                 if url:
-                    msg += f" — get one at [{url}]({url})"
+                    msg += f". Get one at [{url}]({url})."
                 st.markdown(msg)
             with st.form(f"set_key_form_{key_var}", clear_on_submit=True):
                 new_key = st.text_input(
@@ -336,7 +350,7 @@ with st.container(border=True):
             note = "Ollama runs locally, no API key needed"
             if url:
                 note += f". Install from [{url}]({url})"
-            st.caption(f":information_source: {note}")
+            st.caption(note)
 
     # Advanced (small expander, full-width within the card)
     with st.expander("Advanced (batch sizes)"):
@@ -390,10 +404,10 @@ xml_path = acc_dir / "filters.xml"
 # ============== Card 2: Run (Inventory + Classify) ==============
 
 with st.container(border=True):
-    st.subheader("2. Run")
+    st.subheader("Scan and classify")
 
     # ---- Scan inbox (inventory) ----
-    st.markdown("**Scan inbox** — IMAP read, no writes, no LLM, no cost.")
+    st.markdown("**Scan inbox.** IMAP-only. Reads sender, subject, headers. Body stays in Gmail.")
     if st.button("Scan inbox", type="primary", use_container_width=True, key="btn_inv"):
         with st.status(
             f"Scanning {account} (a few minutes for big mailboxes)...",
@@ -416,7 +430,7 @@ with st.container(border=True):
 
     # ---- Classify (analyze) ----
     classify_disabled = not inv_path.exists()
-    st.markdown(f"**Classify with AI** — `{model or 'default model'}`. Subject + sender only, no body.")
+    st.markdown(f"**Classify.** Top senders sent to `{model or 'default model'}`. Sender plus three sample subjects, no body.")
     if st.button(
         "Classify",
         type="primary",
@@ -431,7 +445,7 @@ with st.container(border=True):
                 state="complete" if rc == 0 else "error",
             )
     if classify_disabled:
-        st.caption(":information_source: Run the scan first.")
+        st.caption("Run the scan first.")
     if cats_path.exists():
         cats = json.loads(cats_path.read_text())
         cat_summary = [
@@ -448,10 +462,10 @@ with st.container(border=True):
 # ============== Card 3: Review ==============
 
 with st.container(border=True):
-    st.subheader("3. Review")
+    st.subheader("Review")
     review_ready = allowed_path.exists() or disallowed_path.exists()
     if not review_ready:
-        st.caption(":information_source: Run Classify first; the lists below populate from the AI's output.")
+        st.caption("Run Classify first. Tables below populate from the model's output.")
     st.markdown(
         "Edit each table and **Save**. Move a sender between Allowed and Disallowed by editing it. "
         "The Apply step reads these files."
@@ -482,10 +496,10 @@ with st.container(border=True):
 # ============== Card 4: Apply ==============
 
 with st.container(border=True):
-    st.subheader("4. Apply")
+    st.subheader("Apply")
     apply_disabled = not (allowed_path.exists() or disallowed_path.exists())
     if apply_disabled:
-        st.caption(":information_source: Save reviewed lists first.")
+        st.caption("Save reviewed lists first.")
     st.markdown(
         "Apply your reviewed lists. Allowed senders get sublabels; Disallowed senders' mail moves to Trash. "
         "**Trash is recoverable for 30 days**, then Gmail auto-purges."

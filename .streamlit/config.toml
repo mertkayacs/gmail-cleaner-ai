@@ -1,0 +1,17 @@
+# Brand theme. Anti-SaaS-blue. Off-white bg, warm accent, mono text feel.
+# Picked under impeccable's "scene sentence" rule: developer at desk, dim room,
+# wants the tool to feel like a terminal companion not a consumer dashboard.
+[theme]
+base = "light"
+primaryColor = "#b85c00"           # warm umber, not red, not blue
+backgroundColor = "#f7f4ee"        # off-white tinted toward warm
+secondaryBackgroundColor = "#efe9dd"  # cards a shade darker than bg
+textColor = "#1a1814"              # near-black tinted toward brand hue
+font = "monospace"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+headless = true
+runOnSave = true
