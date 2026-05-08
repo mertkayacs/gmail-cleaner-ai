@@ -18,6 +18,10 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+# Import the actual prompt builder triage.py uses so the preview pane shows
+# what really gets sent, not a stale copy. triage.py is in the same directory.
+from triage import build_classification_prompt
+
 ROOT = Path(__file__).parent
 DATA_DIR = ROOT / "data"
 ENV_PATH = ROOT / ".env"
@@ -421,10 +425,25 @@ with st.container(border=True):
             st.caption(note)
 
     # Advanced (small expander, full-width within the card)
+    # Auto-determine sender batch default from the first scanned account's inventory
+    # (aim for ~5 batches). Falls back to 50 when no scans exist yet. Manual override
+    # via the number_input sticks via Streamlit session_state.
+    _auto_batch_default = 50
+    for _slot, _acc_email in accounts_full:
+        _inv_p = DATA_DIR / _acc_email / "inventory.json"
+        if _inv_p.exists():
+            try:
+                _inv_data = json.loads(_inv_p.read_text())
+                _target = min(_inv_data.get("unique_senders", 200), 200)
+                _auto_batch_default = max(1, min(500, _target // 5))
+                break
+            except Exception:
+                pass
+
     with st.expander("advanced (batch sizes)"):
         adv1, adv2, adv3 = st.columns(3)
         with adv1:
-            sender_batch_size = st.number_input("sender batch size", min_value=1, max_value=500, value=50, step=10)
+            sender_batch_size = st.number_input("sender batch size", min_value=1, max_value=500, value=_auto_batch_default, step=10)
         with adv2:
             top_sender_cap = st.number_input("top sender cap", min_value=10, max_value=2000, value=200, step=50)
         with adv3:
@@ -536,6 +555,25 @@ with st.container(border=True):
     # ---- Classify (analyze) ----
     classify_disabled = not inv_path.exists()
     st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`. Sender plus three sample subjects, no body.")
+
+    # Preview pane: shows batch math + the actual prompt that will be sent.
+    # Only rendered after scan, since the math depends on the inventory.
+    if inv_path.exists():
+        _senders_to_classify = min(inv["unique_senders"], top_sender_cap)
+        _n_batches = max(1, (_senders_to_classify + sender_batch_size - 1) // sender_batch_size)
+        st.caption(
+            f"`{_senders_to_classify}` senders to classify, batch size `{sender_batch_size}`, "
+            f"≈ `{_n_batches}` LLM call{'s' if _n_batches != 1 else ''}. "
+            f"Adjust batch size in Setup → advanced (batch sizes)."
+        )
+        with st.expander("preview the prompt"):
+            _sample_pairs = inv.get("top_senders", [])[:2]
+            _sample_subj = inv.get("sample_subjects", {})
+            if _sample_pairs:
+                _sample_prompt = build_classification_prompt(_sample_pairs, _sample_subj)
+                st.code(_sample_prompt, language="text")
+            else:
+                st.caption("No senders in inventory to preview yet.")
     if st.button(
         "Classify",
         type="primary",
