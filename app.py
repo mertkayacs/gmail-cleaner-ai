@@ -32,10 +32,23 @@ def list_accounts():
 
 
 def run_subcommand(cmd, args, status_placeholder):
-    """Stream a `python3 triage.py <cmd>` invocation into a Streamlit container."""
+    """Stream a `python3 triage.py <cmd>` invocation into a Streamlit container.
+
+    Passes UI-configured settings to the subprocess via environment variables.
+    """
+    env = os.environ.copy()
+    passthrough = [
+        "LLM_PROVIDER", "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
+        "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
+    ]
+    for key in passthrough:
+        if key in st.session_state and st.session_state[key]:
+            env[key] = str(st.session_state[key])
+        elif key in env and not env.get(key):
+            env.pop(key, None)
     full = [sys.executable, str(ROOT / "triage.py"), cmd] + args
     proc = subprocess.Popen(
-        full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        full, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )
     output = []
     with status_placeholder:
@@ -44,6 +57,100 @@ def run_subcommand(cmd, args, status_placeholder):
             st.code("\n".join(output[-200:]), language="text")
     rc = proc.wait()
     return rc, "\n".join(output)
+
+
+PRESETS = {
+    "Anthropic (Claude)": {
+        "provider": "anthropic",
+        "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        "base_url": None,
+        "key_var": "ANTHROPIC_API_KEY",
+        "key_url": "https://console.anthropic.com",
+    },
+    "OpenAI (GPT)": {
+        "provider": "openai",
+        "models": ["gpt-4o", "gpt-4o-mini"],
+        "base_url": None,
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://platform.openai.com",
+    },
+    "Gemini (Google)": {
+        "provider": "gemini",
+        "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "base_url": None,
+        "key_var": "GOOGLE_API_KEY",
+        "key_url": "https://aistudio.google.com/apikey",
+    },
+    "Groq (fast OSS inference)": {
+        "provider": "openai",
+        "models": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "gemma2-9b-it",
+        ],
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://console.groq.com/keys",
+    },
+    "Together AI (OSS hosted)": {
+        "provider": "openai",
+        "models": [
+            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "google/gemma-2-27b-it",
+        ],
+        "base_url": "https://api.together.xyz/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://api.together.xyz/settings/api-keys",
+    },
+    "OpenRouter (catalog)": {
+        "provider": "openai",
+        "models": [
+            "anthropic/claude-opus-4-7",
+            "openai/gpt-4o",
+            "meta-llama/llama-3.3-70b-instruct",
+            "google/gemma-2-27b-it",
+        ],
+        "base_url": "https://openrouter.ai/api/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://openrouter.ai/keys",
+    },
+    "Mistral La Plateforme": {
+        "provider": "openai",
+        "models": ["mistral-large-latest", "mistral-medium-latest"],
+        "base_url": "https://api.mistral.ai/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://console.mistral.ai/api-keys",
+    },
+    "Ollama (local)": {
+        "provider": "ollama",
+        "models": ["llama3.3", "llama3.1", "gemma3", "mistral", "qwen2.5", "phi4"],
+        "base_url": None,
+        "key_var": None,
+        "key_url": "https://ollama.com",
+    },
+    "LM Studio (local)": {
+        "provider": "openai",
+        "models": [],
+        "base_url": "http://localhost:1234/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": "https://lmstudio.ai",
+    },
+    "llama.cpp server (local)": {
+        "provider": "openai",
+        "models": [],
+        "base_url": "http://localhost:8080/v1",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": None,
+    },
+    "Custom OpenAI-compatible": {
+        "provider": "openai",
+        "models": [],
+        "base_url": "",
+        "key_var": "OPENAI_API_KEY",
+        "key_url": None,
+    },
+}
 
 
 def parse_list_file(path):
@@ -145,20 +252,93 @@ After saving `.env`, refresh this page.
 account = st.sidebar.selectbox("Account", accounts)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("LLM Provider")
-provider = st.sidebar.selectbox(
-    "Provider",
-    ["anthropic", "openai", "gemini", "ollama"],
-    index=["anthropic", "openai", "gemini", "ollama"].index(
-        os.environ.get("LLM_PROVIDER", "anthropic")
-    ),
+st.sidebar.subheader("LLM provider")
+
+preset_names = list(PRESETS.keys())
+preset_name = st.sidebar.selectbox(
+    "Provider preset",
+    preset_names,
+    help="Pick a preset to auto-configure provider, base URL, and suggested models.",
 )
-model_override = st.sidebar.text_input("Model (blank = provider default)", "")
-if model_override:
-    os.environ["LLM_MODEL"] = model_override
-elif "LLM_MODEL" in os.environ:
-    del os.environ["LLM_MODEL"]
-os.environ["LLM_PROVIDER"] = provider
+preset = PRESETS[preset_name]
+
+# Model
+preset_models = preset["models"]
+if preset_models:
+    selected_model = st.sidebar.selectbox("Suggested model", preset_models)
+else:
+    selected_model = ""
+custom_model = st.sidebar.text_input(
+    "Custom model name (overrides above)",
+    "",
+    help="Type any model name your provider supports. Newer models work even if not in the suggested list.",
+)
+model = custom_model.strip() or selected_model
+
+# Base URL handling
+base_url = preset.get("base_url") or ""
+if preset_name == "Custom OpenAI-compatible":
+    base_url = st.sidebar.text_input(
+        "Base URL",
+        base_url,
+        placeholder="https://your-provider.com/v1",
+        help="OpenAI-compatible chat completions endpoint.",
+    )
+elif base_url:
+    st.sidebar.caption(f"Base URL: `{base_url}`")
+
+# Ollama host
+ollama_host = ""
+if preset["provider"] == "ollama":
+    ollama_host = st.sidebar.text_input(
+        "Ollama host",
+        os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+    )
+
+# Key status
+key_var = preset.get("key_var")
+if key_var:
+    if os.environ.get(key_var):
+        st.sidebar.caption(f":white_check_mark: `{key_var}` is set in .env")
+    else:
+        url = preset.get("key_url")
+        msg = f":x: `{key_var}` missing in .env"
+        if url:
+            msg += f" — get one at [{url}]({url})"
+        st.sidebar.caption(msg)
+elif preset["provider"] == "ollama":
+    url = preset.get("key_url")
+    note = "Ollama runs locally, no API key needed"
+    if url:
+        note += f" — install from [{url}]({url})"
+    st.sidebar.caption(f":information_source: {note}")
+
+# Advanced settings
+with st.sidebar.expander("Advanced settings"):
+    sender_batch_size = st.number_input(
+        "Sender batch size",
+        min_value=1, max_value=500, value=50, step=10,
+        help="Senders per LLM call. Smaller = more calls but more responsive.",
+    )
+    top_sender_cap = st.number_input(
+        "Top sender cap",
+        min_value=10, max_value=2000, value=200, step=50,
+        help="Process only the top N senders by mail volume. Larger inboxes can use more.",
+    )
+    fetch_batch_size = st.number_input(
+        "IMAP fetch batch size",
+        min_value=50, max_value=2000, value=500, step=50,
+        help="Mails per IMAP FETCH call. Don't change unless you hit timeouts.",
+    )
+
+# Persist all settings to session state so run_subcommand can pass them through.
+st.session_state["LLM_PROVIDER"] = preset["provider"]
+st.session_state["LLM_MODEL"] = model
+st.session_state["LLM_BASE_URL"] = base_url
+st.session_state["OLLAMA_HOST"] = ollama_host
+st.session_state["SENDER_BATCH_SIZE"] = str(sender_batch_size)
+st.session_state["TOP_SENDER_CAP"] = str(top_sender_cap)
+st.session_state["FETCH_BATCH_SIZE"] = str(fetch_batch_size)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Run")

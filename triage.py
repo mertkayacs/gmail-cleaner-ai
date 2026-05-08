@@ -35,9 +35,11 @@ from pathlib import Path
 # so that `triage.py --help` works without installing deps first.
 
 DATA_DIR = Path(__file__).parent / "data"
-SENDER_BATCH_SIZE = 50          # senders per classification call
-TOP_SENDER_CAP = 200            # only classify top N senders by volume
-FETCH_BATCH_SIZE = 500          # IMAP fetch chunk size
+
+# Defaults overridable via env vars (Streamlit UI sets them in subprocess env).
+SENDER_BATCH_SIZE = int(os.environ.get("SENDER_BATCH_SIZE", "50"))    # senders per classification call
+TOP_SENDER_CAP = int(os.environ.get("TOP_SENDER_CAP", "200"))         # only classify top N senders by volume
+FETCH_BATCH_SIZE = int(os.environ.get("FETCH_BATCH_SIZE", "500"))     # IMAP fetch chunk size
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
 TRASH_FOLDER = '"[Gmail]/Trash"'
 

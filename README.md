@@ -97,6 +97,10 @@ Prereqs: Python 3.10+, an LLM provider key (or Ollama locally), and Gmail App Pa
 | Ollama | `ollama` | Local open-source models, no API key |
 | **Any OpenAI-compatible API** | `openai` + `LLM_BASE_URL=<endpoint>` | OpenRouter, Together AI, Groq, Mistral, vLLM, LM Studio, llama.cpp server, etc. Put that provider's key in `OPENAI_API_KEY`. |
 
+The Streamlit UI ships with eleven provider presets (Anthropic, OpenAI, Gemini, Groq, Together AI, OpenRouter, Mistral La Plateforme, Ollama, LM Studio, llama.cpp server, Custom). Each preset auto-fills the base URL and a starter list of models, with a free-text override so any model name works even if it isn't in the dropdown.
+
+Sidebar also exposes batch sizes (sender batch, top-sender cap, IMAP fetch size) under "Advanced settings" so you can tune for very large or very small inboxes without editing code.
+
 That covers most LLMs in use today. If you find one that needs custom logic, add it as below.
 
 ### Add a custom provider
