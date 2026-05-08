@@ -41,6 +41,8 @@ SENDER_BATCH_SIZE = int(os.environ.get("SENDER_BATCH_SIZE", "50"))    # senders 
 TOP_SENDER_CAP = int(os.environ.get("TOP_SENDER_CAP", "200"))         # only classify top N senders by volume
 FETCH_BATCH_SIZE = int(os.environ.get("FETCH_BATCH_SIZE", "500"))     # IMAP fetch chunk size
 CLASSIFY_MODE = os.environ.get("CLASSIFY_MODE", "sender_subject")     # sender_only | sender_subject | sender_subject_body
+BODY_LINES = int(os.environ.get("BODY_LINES", "5"))                   # body lines per sample mail (mode 3 only)
+BODY_SAMPLES_PER_SENDER = 3                                           # how many sample mails per top sender to fetch body for
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
 TRASH_FOLDER = '"[Gmail]/Trash"'
 
@@ -104,6 +106,48 @@ def domain_of(email_addr):
     return email_addr.split("@", 1)[1].lower() if "@" in email_addr else ""
 
 
+def extract_text_excerpt(body_bytes, n_lines):
+    """Pull a short text excerpt from a fetched message body.
+
+    Walks MIME parts, prefers text/plain over text/html. Strips HTML if
+    only HTML is available. Returns the first n_lines of meaningful text,
+    truncated to keep the prompt small.
+    """
+    msg = message_from_bytes(body_bytes)
+    text = None
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = (part.get_content_type() or "").lower()
+            if ctype == "text/plain":
+                payload = part.get_payload(decode=True) or b""
+                text = payload.decode(errors="ignore")
+                break
+        if text is None:
+            for part in msg.walk():
+                ctype = (part.get_content_type() or "").lower()
+                if ctype == "text/html":
+                    payload = part.get_payload(decode=True) or b""
+                    text = re.sub(r"<[^>]+>", " ", payload.decode(errors="ignore"))
+                    break
+    else:
+        payload = msg.get_payload(decode=True)
+        if isinstance(payload, (bytes, bytearray)):
+            text = payload.decode(errors="ignore")
+            if (msg.get_content_type() or "").lower() == "text/html":
+                text = re.sub(r"<[^>]+>", " ", text)
+    if not text:
+        return ""
+
+    lines = []
+    for raw in text.splitlines():
+        cleaned = " ".join(raw.split())
+        if cleaned:
+            lines.append(cleaned[:200])
+        if len(lines) >= n_lines:
+            break
+    return "\n".join(lines)
+
+
 # -------------------- Inventory -----------------------------------------------
 
 def cmd_inventory(account_email):
@@ -130,6 +174,9 @@ def cmd_inventory(account_email):
         domains = Counter()
         has_unsubscribe = 0
         samples = defaultdict(list)
+        # Per-sender UID list, capped at BODY_SAMPLES_PER_SENDER, used by mode-3
+        # body-fetch pass below. Building it during pass 1 avoids a third lookup.
+        sender_uids = defaultdict(list)
 
         n_batches = (total + FETCH_BATCH_SIZE - 1) // FETCH_BATCH_SIZE
         for i, batch_start in enumerate(range(0, total, FETCH_BATCH_SIZE)):
@@ -144,7 +191,7 @@ def cmd_inventory(account_email):
             if typ != "OK":
                 print(f"  Fetch failed: {typ}")
                 continue
-            for _uid, header_bytes in parse_fetch_response(msg_data):
+            for uid, header_bytes in parse_fetch_response(msg_data):
                 hdrs = parse_headers(header_bytes)
                 sender = extract_sender(hdrs["from"])
                 if not sender:
@@ -157,6 +204,34 @@ def cmd_inventory(account_email):
                     has_unsubscribe += 1
                 if hdrs["subject"] and len(samples[sender]) < 5:
                     samples[sender].append(hdrs["subject"][:200])
+                if uid and len(sender_uids[sender]) < BODY_SAMPLES_PER_SENDER:
+                    sender_uids[sender].append(uid)
+
+        # Pass 2 (mode 3 only): fetch body excerpts for top senders' sample UIDs.
+        # Skipped entirely for sender_only and sender_subject so privacy and speed
+        # are unchanged for the default flow.
+        sample_bodies = {}
+        if CLASSIFY_MODE == "sender_subject_body":
+            top_for_body = [s for s, _ in senders.most_common(TOP_SENDER_CAP)]
+            print(f"Mode {CLASSIFY_MODE}: fetching body excerpts for "
+                  f"{len(top_for_body)} top senders ({BODY_LINES} lines each)...")
+            for j, sender in enumerate(top_for_body):
+                uids_for_sender = sender_uids.get(sender, [])
+                if not uids_for_sender:
+                    continue
+                excerpts = []
+                for uid in uids_for_sender:
+                    typ, body_data = conn.uid("FETCH", uid, "(BODY.PEEK[])")
+                    if typ != "OK":
+                        continue
+                    for _u, body_bytes in parse_fetch_response(body_data):
+                        excerpt = extract_text_excerpt(body_bytes, BODY_LINES)
+                        if excerpt:
+                            excerpts.append(excerpt)
+                if excerpts:
+                    sample_bodies[sender] = excerpts
+                if (j + 1) % 25 == 0:
+                    print(f"  body fetch: {j + 1}/{len(top_for_body)} senders done")
     finally:
         try:
             conn.logout()
@@ -166,6 +241,7 @@ def cmd_inventory(account_email):
     out_dir = DATA_DIR / email_addr
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    top_set = dict(senders.most_common(TOP_SENDER_CAP))
     inventory = {
         "account": email_addr,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -173,10 +249,12 @@ def cmd_inventory(account_email):
         "unique_senders": len(senders),
         "unique_domains": len(domains),
         "has_list_unsubscribe": has_unsubscribe,
+        "classify_mode": CLASSIFY_MODE,
+        "body_lines": BODY_LINES if CLASSIFY_MODE == "sender_subject_body" else 0,
         "top_senders": senders.most_common(TOP_SENDER_CAP),
         "top_domains": domains.most_common(50),
-        "sample_subjects": {s: subjs for s, subjs in samples.items()
-                            if s in dict(senders.most_common(TOP_SENDER_CAP))},
+        "sample_subjects": {s: subjs for s, subjs in samples.items() if s in top_set},
+        "sample_bodies": {s: bodies for s, bodies in sample_bodies.items() if s in top_set},
     }
     (out_dir / "inventory.json").write_text(json.dumps(inventory, indent=2, default=str))
 
@@ -269,7 +347,13 @@ def cmd_analyze(account_email):
         raise SystemExit(f"No inventory at {inv_path}. Run `inventory` first.")
     inventory = json.loads(inv_path.read_text())
     top_senders = inventory["top_senders"]
-    samples = inventory.get("sample_subjects", {})
+    samples = dict(inventory.get("sample_subjects", {}))
+    # Body excerpts for mode 3 are stored separately in inventory.json under
+    # 'sample_bodies'. Merge them into samples with a '::body' suffix so the
+    # prompt builder picks them up via the convention defined in
+    # build_classification_prompt above.
+    for _sender, _bodies in inventory.get("sample_bodies", {}).items():
+        samples[_sender + "::body"] = _bodies
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")

@@ -91,7 +91,7 @@ def run_subcommand(cmd, args, status_placeholder):
     passthrough = [
         "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
-        "CLASSIFY_MODE",
+        "CLASSIFY_MODE", "BODY_LINES",
     ]
     for key in passthrough:
         if key in st.session_state and st.session_state[key]:
@@ -558,10 +558,10 @@ with st.container(border=True):
     st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`.")
 
     # Mode selector. Determines what evidence per sender goes to the LLM.
-    # Phase 3 will add a third option (sender + subject + first N body lines).
     _mode_labels = {
         "sender_subject": "sender + sample subjects (default, balanced)",
         "sender_only": "sender only (most private, lowest cost, less accurate)",
+        "sender_subject_body": "sender + subject + first N body lines (most accurate, opt-in privacy tradeoff)",
     }
     _mode_keys = list(_mode_labels.keys())
     _default_mode_idx = _mode_keys.index(
@@ -577,6 +577,17 @@ with st.container(border=True):
         key="CLASSIFY_MODE",
         horizontal=False,
     )
+    if classify_mode == "sender_subject_body":
+        body_lines = st.slider(
+            "body lines per sample mail",
+            min_value=1, max_value=20, value=5, step=1,
+            help="First N lines of the message body, per sample mail. Sent to the LLM in addition to subject.",
+        )
+        st.session_state["BODY_LINES"] = str(body_lines)
+        st.caption(
+            "Mode 3 fetches body excerpts via IMAP after the header pass. "
+            "Adds time to scan; sends partial body text to your chosen LLM."
+        )
 
     # Preview pane: shows batch math + the actual prompt that will be sent.
     # Only rendered after scan, since the math depends on the inventory.

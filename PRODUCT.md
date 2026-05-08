@@ -15,7 +15,7 @@ It is a tool. Design serves the function. The interface gets out of the way; the
 
 Clean up multiple Gmail accounts using whichever LLM the user trusts. Read mail metadata via IMAP (App Password, no OAuth and no Google Cloud project), classify senders via LiteLLM (100+ providers), apply labels and Trash via IMAP. Single-page Streamlit UI, no terminal required.
 
-The whole tool is BYOK: the user provides their Gmail App Password, their LLM key. Nothing leaves the user's machine except the metadata sent to their chosen LLM (subject + sender + sample subjects, never the body). Trash is recoverable for 30 days, then Gmail auto-purges.
+The whole tool is BYOK: the user provides their Gmail App Password, their LLM key. The default mode sends only sender email + sample subjects to the chosen LLM, never the body. A "sender only" mode sends sender + count alone (most private, less accurate). An opt-in "sender + subject + first N body lines" mode adds short body excerpts when the user wants higher accuracy and accepts the privacy tradeoff; it is never the default. Trash is recoverable for 30 days, then Gmail auto-purges.
 
 ## Brand voice / tone
 
