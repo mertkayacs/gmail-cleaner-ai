@@ -374,6 +374,18 @@ with st.container(border=True):
         if is_ollama:
             ollama_host = st.text_input("Ollama host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
 
+        # LM Studio and llama.cpp use OPENAI_API_KEY by LiteLLM convention. The
+        # key field below shows that var name, which can read as "is this
+        # uploading my real OpenAI key to my local server?" — clarifier removes
+        # the doubt before the field appears.
+        if preset_name in ("LM Studio (local)", "llama.cpp server (local)"):
+            st.caption(
+                "Local OpenAI-compatible server. The key field below uses "
+                "`OPENAI_API_KEY` by LiteLLM convention, but any non-empty value "
+                "works — your local server normally ignores it. Your real OpenAI "
+                "key isn't required."
+            )
+
         key_var = preset.get("key_var")
         if key_var:
             existing_key = os.environ.get(key_var, "")
@@ -431,7 +443,19 @@ elif selected_key_set:
     top_status = f"{preset_name} ready. Add a Gmail account below to begin."
 else:
     top_status = "Add a Gmail App Password and an LLM key below to begin."
-status_placeholder_top.caption(top_status)
+
+# When fully configured, a quiet caption is right; users glance and move on.
+# When something's missing, the banner needs to actually catch the eye —
+# this is the line that tells them what to do next.
+if accounts and selected_key_set:
+    status_placeholder_top.caption(top_status)
+else:
+    status_placeholder_top.markdown(
+        f"<div style='font-family: monospace; padding: 10px 14px; "
+        f"background: #efe9dd; border-radius: 4px; color: #9b4d00; "
+        f"margin: 8px 0; font-size: 0.95rem;'>{top_status}</div>",
+        unsafe_allow_html=True,
+    )
 
 # Persist runtime settings to session
 st.session_state["LLM_MODEL"] = model
