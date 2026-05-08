@@ -1,10 +1,10 @@
-# gmail-triage
+# gmail-cleaner-ai
 
 > Clean up multiple Gmail accounts with whichever LLM you trust.
 
 You have several Gmail accounts. Each holds thousands of mails. Most of it is marketing, automated notifications, or newsletters you stopped reading. Manually triaging each account takes hours and never finishes.
 
-`gmail-triage` reads your accounts via IMAP, classifies senders with an LLM you pick (Anthropic, OpenAI, Gemini, or any open-source model via Ollama), and either keeps them with a sublabel or moves them to Trash. One account at a time, debuggable, with a Streamlit UI for review.
+`gmail-cleaner-ai` reads your accounts via IMAP, classifies senders with an LLM you pick (Anthropic, OpenAI, Gemini, or any open-source model via Ollama), and either keeps them with a sublabel or moves them to Trash. One account at a time, debuggable, with a Streamlit UI for review.
 
 ## What it does
 
@@ -65,8 +65,8 @@ Sender-centric: a typical inbox has a few hundred unique senders covering 90%+ o
 ## Quick start
 
 ```bash
-git clone https://github.com/mertkayacs/gmail-triage
-cd gmail-triage
+git clone https://github.com/mertkayacs/gmail-cleaner-ai
+cd gmail-cleaner-ai
 bash install.sh                    # checks deps, copies .env.example, installs requirements
 # edit .env: pick LLM_PROVIDER, add the matching API key, add Gmail accounts
 python3 triage.py inventory <first-account>
@@ -119,13 +119,13 @@ Then `LLM_PROVIDER=myprovider` in `.env` switches the whole pipeline.
 
 | Tool | Self-hosted | Multi-account | LLM-driven | Cost | Where mail flows |
 |---|---|---|---|---|---|
-| **gmail-triage** | Yes | Yes | Yes (your provider) | API usage only (~$0.05–0.20 per account on Anthropic) | Your machine + chosen LLM |
+| **gmail-cleaner-ai** | Yes | Yes | Yes (your provider) | API usage only (~$0.05–0.20 per account on Anthropic) | Your machine + chosen LLM |
 | SaneBox | No | Yes | Heuristics | $60+/yr | Their servers |
 | Gmail filters (built-in) | Yes | Per account, manual | No (rules only) | Free | Google |
 | Cleanfox / Unroll.me | No | Yes | Heuristics | Free (resells data) | Their servers |
 | Hey by Basecamp | No | Single | Manual curation | $99/yr | Their servers |
 
-What gmail-triage is **not** good for:
+What gmail-cleaner-ai is **not** good for:
 
 - Real-time per-mail classification on incoming mail. This is a batch tool.
 - Composing or sending mail. Read-and-organize only.

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# install.sh - one-command setup for gmail-triage
+# install.sh - one-command setup for gmail-cleaner-ai
 # Usage: bash install.sh
 
 set -e
 
-echo "gmail-triage installer"
+echo "gmail-cleaner-ai installer"
 echo "----------------------"
 
 # Python check

@@ -1,5 +1,5 @@
 """
-Streamlit UI for gmail-triage.
+Streamlit UI for gmail-cleaner-ai.
 
 Run: streamlit run app.py
 
@@ -81,9 +81,9 @@ def write_list_file(path, header, df):
 
 # ============== UI ==============
 
-st.set_page_config(page_title="gmail-triage", page_icon=":mailbox:", layout="wide")
+st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="wide")
 
-st.sidebar.title("gmail-triage")
+st.sidebar.title("gmail-cleaner-ai")
 accounts = list_accounts()
 if not accounts:
     st.sidebar.error("No accounts in .env. Copy .env.example to .env and fill in.")
