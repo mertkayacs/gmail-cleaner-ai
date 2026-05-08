@@ -255,7 +255,8 @@ def cmd_analyze(account_email):
     load_dotenv(Path(__file__).parent / ".env")
     from lib.classifier import get_classifier
     classifier = get_classifier()
-    print(f"Using {type(classifier).__name__} (model={classifier.model})")
+    api_base_note = f" via {classifier.api_base}" if classifier.api_base else ""
+    print(f"Using model: {classifier.model}{api_base_note}")
 
     all_classifications = {}
     n_batches = (len(top_senders) + SENDER_BATCH_SIZE - 1) // SENDER_BATCH_SIZE

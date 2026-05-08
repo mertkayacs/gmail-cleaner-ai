@@ -38,7 +38,7 @@ def run_subcommand(cmd, args, status_placeholder):
     """
     env = os.environ.copy()
     passthrough = [
-        "LLM_PROVIDER", "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
+        "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
     ]
     for key in passthrough:
@@ -61,94 +61,89 @@ def run_subcommand(cmd, args, status_placeholder):
 
 PRESETS = {
     "Anthropic (Claude)": {
-        "provider": "anthropic",
         "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
         "base_url": None,
         "key_var": "ANTHROPIC_API_KEY",
         "key_url": "https://console.anthropic.com",
     },
     "OpenAI (GPT)": {
-        "provider": "openai",
         "models": ["gpt-4o", "gpt-4o-mini"],
         "base_url": None,
         "key_var": "OPENAI_API_KEY",
         "key_url": "https://platform.openai.com",
     },
     "Gemini (Google)": {
-        "provider": "gemini",
-        "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "models": ["gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"],
         "base_url": None,
-        "key_var": "GOOGLE_API_KEY",
+        "key_var": "GEMINI_API_KEY",
         "key_url": "https://aistudio.google.com/apikey",
     },
     "Groq (fast OSS inference)": {
-        "provider": "openai",
         "models": [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "gemma2-9b-it",
+            "groq/llama-3.3-70b-versatile",
+            "groq/llama-3.1-8b-instant",
+            "groq/gemma2-9b-it",
         ],
-        "base_url": "https://api.groq.com/openai/v1",
-        "key_var": "OPENAI_API_KEY",
+        "base_url": None,
+        "key_var": "GROQ_API_KEY",
         "key_url": "https://console.groq.com/keys",
     },
     "Together AI (OSS hosted)": {
-        "provider": "openai",
         "models": [
-            "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            "google/gemma-2-27b-it",
+            "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "together_ai/google/gemma-2-27b-it",
         ],
-        "base_url": "https://api.together.xyz/v1",
-        "key_var": "OPENAI_API_KEY",
+        "base_url": None,
+        "key_var": "TOGETHERAI_API_KEY",
         "key_url": "https://api.together.xyz/settings/api-keys",
     },
     "OpenRouter (catalog)": {
-        "provider": "openai",
         "models": [
-            "anthropic/claude-opus-4-7",
-            "openai/gpt-4o",
-            "meta-llama/llama-3.3-70b-instruct",
-            "google/gemma-2-27b-it",
+            "openrouter/anthropic/claude-opus-4-7",
+            "openrouter/openai/gpt-4o",
+            "openrouter/meta-llama/llama-3.3-70b-instruct",
+            "openrouter/google/gemma-2-27b-it",
         ],
-        "base_url": "https://openrouter.ai/api/v1",
-        "key_var": "OPENAI_API_KEY",
+        "base_url": None,
+        "key_var": "OPENROUTER_API_KEY",
         "key_url": "https://openrouter.ai/keys",
     },
     "Mistral La Plateforme": {
-        "provider": "openai",
-        "models": ["mistral-large-latest", "mistral-medium-latest"],
-        "base_url": "https://api.mistral.ai/v1",
-        "key_var": "OPENAI_API_KEY",
+        "models": ["mistral/mistral-large-latest", "mistral/mistral-medium-latest"],
+        "base_url": None,
+        "key_var": "MISTRAL_API_KEY",
         "key_url": "https://console.mistral.ai/api-keys",
     },
     "Ollama (local)": {
-        "provider": "ollama",
-        "models": ["llama3.3", "llama3.1", "gemma3", "mistral", "qwen2.5", "phi4"],
-        "base_url": None,
+        "models": [
+            "ollama/llama3.3", "ollama/llama3.1", "ollama/gemma3",
+            "ollama/mistral", "ollama/qwen2.5", "ollama/phi4",
+        ],
+        "base_url": "http://localhost:11434",
         "key_var": None,
         "key_url": "https://ollama.com",
     },
     "LM Studio (local)": {
-        "provider": "openai",
         "models": [],
         "base_url": "http://localhost:1234/v1",
         "key_var": "OPENAI_API_KEY",
         "key_url": "https://lmstudio.ai",
+        "model_hint": "Prefix with `openai/` (e.g., `openai/qwen2.5-coder:32b`)",
     },
     "llama.cpp server (local)": {
-        "provider": "openai",
         "models": [],
         "base_url": "http://localhost:8080/v1",
         "key_var": "OPENAI_API_KEY",
         "key_url": None,
+        "model_hint": "Prefix with `openai/` (e.g., `openai/llama-3.3-70b`)",
     },
-    "Custom OpenAI-compatible": {
-        "provider": "openai",
+    "Custom (any LiteLLM model)": {
         "models": [],
         "base_url": "",
-        "key_var": "OPENAI_API_KEY",
-        "key_url": None,
+        "key_var": None,
+        "key_url": "https://docs.litellm.ai/docs/providers",
+        "model_hint": "Use any LiteLLM-supported model. See docs for the prefix format.",
     },
 }
 
@@ -202,8 +197,12 @@ st.markdown(
 accounts = list_accounts()
 provider_keys = {
     "Anthropic": bool(os.environ.get("ANTHROPIC_API_KEY")),
-    "OpenAI / OpenAI-compatible": bool(os.environ.get("OPENAI_API_KEY")),
-    "Gemini": bool(os.environ.get("GOOGLE_API_KEY")),
+    "OpenAI": bool(os.environ.get("OPENAI_API_KEY")),
+    "Gemini": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
+    "Groq": bool(os.environ.get("GROQ_API_KEY")),
+    "Together AI": bool(os.environ.get("TOGETHERAI_API_KEY")),
+    "OpenRouter": bool(os.environ.get("OPENROUTER_API_KEY")),
+    "Mistral": bool(os.environ.get("MISTRAL_API_KEY")),
 }
 
 with st.expander("Setup status", expanded=not accounts):
@@ -331,8 +330,8 @@ with st.sidebar.expander("Advanced settings"):
         help="Mails per IMAP FETCH call. Don't change unless you hit timeouts.",
     )
 
-# Persist all settings to session state so run_subcommand can pass them through.
-st.session_state["LLM_PROVIDER"] = preset["provider"]
+# Persist settings to session state. LiteLLM derives the provider from the model
+# prefix, so we don't store a separate LLM_PROVIDER value.
 st.session_state["LLM_MODEL"] = model
 st.session_state["LLM_BASE_URL"] = base_url
 st.session_state["OLLAMA_HOST"] = ollama_host

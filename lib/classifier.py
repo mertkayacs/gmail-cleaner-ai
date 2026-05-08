@@ -1,33 +1,40 @@
 """
-Provider-agnostic email classifier.
+LLM-agnostic email classifier built on LiteLLM.
 
-Selects the LLM provider via LLM_PROVIDER env var. Each provider implements
-classify_batch(prompt: str) -> dict[sender, classification].
+LiteLLM gives one Python interface to 100+ LLM providers. Pick the model with
+a provider prefix and LiteLLM routes to the right backend.
 
-Adding a new provider:
-1. Implement a class extending Classifier.
-2. Register in PROVIDERS dict at the bottom.
-3. Document required env vars in .env.example.
+Examples of LLM_MODEL values:
+    claude-opus-4-7                                     -> Anthropic
+    gpt-4o                                              -> OpenAI
+    gemini/gemini-2.5-pro                               -> Google Gemini
+    groq/llama-3.3-70b-versatile                        -> Groq
+    together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo -> Together AI
+    openrouter/anthropic/claude-opus-4-7                -> OpenRouter
+    mistral/mistral-large-latest                        -> Mistral
+    ollama/llama3.3                                     -> Ollama (local)
+    openai/<your-model> + LLM_BASE_URL=http://...       -> LM Studio, llama.cpp,
+                                                           any OpenAI-compatible
+
+Provider env vars (LiteLLM reads them automatically):
+    ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, GROQ_API_KEY,
+    TOGETHERAI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY
+
+LiteLLM docs: https://docs.litellm.ai/docs/providers
 """
 
 import json
 import os
 import re
-from abc import ABC, abstractmethod
+
+# Disable LiteLLM's anonymous telemetry by default. Privacy preference.
+os.environ.setdefault("LITELLM_TELEMETRY", "False")
 
 
-class Classifier(ABC):
-    @abstractmethod
-    def classify_batch(self, prompt: str) -> dict:
-        """Run a classification batch. Return parsed JSON dict."""
-        ...
-
-
-def _extract_json(text: str) -> dict:
+def _extract_json(text):
     """Tolerate JSON wrapped in prose or code fences."""
-    text = text.strip()
+    text = (text or "").strip()
     if text.startswith("```"):
-        # strip code fences
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```\s*$", "", text)
     try:
@@ -39,126 +46,30 @@ def _extract_json(text: str) -> dict:
         raise ValueError(f"Could not parse JSON from response: {text[:300]}")
 
 
-class AnthropicClassifier(Classifier):
-    """Claude via Anthropic API. Requires ANTHROPIC_API_KEY."""
+class Classifier:
+    """Unified classifier over any LiteLLM-supported provider."""
 
     DEFAULT_MODEL = "claude-opus-4-7"
 
-    def __init__(self, model=None, api_key=None):
-        import anthropic
-        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise RuntimeError("ANTHROPIC_API_KEY missing")
-        self.client = anthropic.Anthropic(api_key=key)
-        self.model = model or self.DEFAULT_MODEL
+    def __init__(self, model=None, api_base=None):
+        from litellm import completion
+        self._completion = completion
+        self.model = model or os.environ.get("LLM_MODEL") or self.DEFAULT_MODEL
+        self.api_base = api_base or os.environ.get("LLM_BASE_URL") or None
 
     def classify_batch(self, prompt):
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = "".join(b.text for b in resp.content if hasattr(b, "text"))
+        kwargs = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 8192,
+        }
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        resp = self._completion(**kwargs)
+        text = resp.choices[0].message.content or ""
         return _extract_json(text)
 
 
-class OpenAIClassifier(Classifier):
-    """OpenAI-compatible API. Covers OpenAI itself plus OpenRouter, Together AI,
-    Groq, Mistral, vLLM, LM Studio, llama.cpp server, and any other endpoint
-    that speaks the OpenAI Chat Completions API. Set LLM_BASE_URL to point at
-    the provider's endpoint; OPENAI_API_KEY holds that provider's key."""
-
-    DEFAULT_MODEL = "gpt-4o"
-
-    def __init__(self, model=None, api_key=None, base_url=None):
-        from openai import OpenAI
-        key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise RuntimeError("OPENAI_API_KEY missing")
-        url = base_url or os.environ.get("LLM_BASE_URL")
-        kwargs = {"api_key": key}
-        if url:
-            kwargs["base_url"] = url
-        self.client = OpenAI(**kwargs)
-        self.model = model or self.DEFAULT_MODEL
-
-    def classify_batch(self, prompt):
-        # response_format json_object is OpenAI-only; non-OpenAI providers may not
-        # support it. The prompt asks for JSON and _extract_json is tolerant.
-        resp = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return _extract_json(resp.choices[0].message.content or "")
-
-
-class GeminiClassifier(Classifier):
-    """Gemini via Google AI API. Requires GOOGLE_API_KEY."""
-
-    DEFAULT_MODEL = "gemini-2.5-pro"
-
-    def __init__(self, model=None, api_key=None):
-        import google.generativeai as genai
-        key = api_key or os.environ.get("GOOGLE_API_KEY")
-        if not key:
-            raise RuntimeError("GOOGLE_API_KEY missing")
-        genai.configure(api_key=key)
-        self.client = genai.GenerativeModel(model or self.DEFAULT_MODEL)
-
-    def classify_batch(self, prompt):
-        resp = self.client.generate_content(
-            prompt,
-            generation_config={"response_mime_type": "application/json"},
-        )
-        return _extract_json(resp.text)
-
-
-class OllamaClassifier(Classifier):
-    """Local or remote open-source models via Ollama. No API key required."""
-
-    DEFAULT_MODEL = "llama3.1:70b"
-
-    def __init__(self, model=None, host=None):
-        self.host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        self.model = model or self.DEFAULT_MODEL
-
-    def classify_batch(self, prompt):
-        import requests
-        resp = requests.post(
-            f"{self.host}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "format": "json",
-                "stream": False,
-            },
-            timeout=600,
-        )
-        resp.raise_for_status()
-        return _extract_json(resp.json().get("response", ""))
-
-
-PROVIDERS = {
-    "anthropic": AnthropicClassifier,
-    "openai": OpenAIClassifier,
-    "gemini": GeminiClassifier,
-    "ollama": OllamaClassifier,
-}
-
-
-def get_classifier(provider=None, model=None) -> Classifier:
-    """
-    Build a classifier from env or explicit args.
-
-    LLM_PROVIDER  one of: anthropic, openai, gemini, ollama
-    LLM_MODEL     overrides the provider's default model
-    """
-    provider = (provider or os.environ.get("LLM_PROVIDER") or "anthropic").lower()
-    model = model or os.environ.get("LLM_MODEL")
-    if provider not in PROVIDERS:
-        raise ValueError(
-            f"Unknown LLM_PROVIDER: '{provider}'. "
-            f"Choose one of: {', '.join(PROVIDERS.keys())}"
-        )
-    cls = PROVIDERS[provider]
-    return cls(model=model) if model else cls()
+def get_classifier(model=None, api_base=None) -> Classifier:
+    """Build a classifier from explicit args or env vars."""
+    return Classifier(model=model, api_base=api_base)

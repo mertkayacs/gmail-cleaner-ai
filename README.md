@@ -87,21 +87,26 @@ Prereqs: Python 3.10+, an LLM provider key (or Ollama locally), and Gmail App Pa
 
 ## How to customize
 
-### Built-in providers
+### Built-in providers (via LiteLLM)
 
-| Provider | `LLM_PROVIDER` | Notes |
+The classifier sits on top of [LiteLLM](https://github.com/BerriAI/litellm), which speaks 100+ provider APIs through one unified call. You pick a provider by setting `LLM_MODEL` to a model name with the right prefix.
+
+| Provider | `LLM_MODEL` example | Env var |
 |---|---|---|
-| Anthropic | `anthropic` | Claude family |
-| OpenAI | `openai` | GPT family |
-| Gemini | `gemini` | Google models |
-| Ollama | `ollama` | Local open-source models, no API key |
-| **Any OpenAI-compatible API** | `openai` + `LLM_BASE_URL=<endpoint>` | OpenRouter, Together AI, Groq, Mistral, vLLM, LM Studio, llama.cpp server, etc. Put that provider's key in `OPENAI_API_KEY`. |
+| Anthropic | `claude-opus-4-7` | `ANTHROPIC_API_KEY` |
+| OpenAI | `gpt-4o` | `OPENAI_API_KEY` |
+| Gemini | `gemini/gemini-2.5-pro` | `GEMINI_API_KEY` |
+| Groq | `groq/llama-3.3-70b-versatile` | `GROQ_API_KEY` |
+| Together AI | `together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHERAI_API_KEY` |
+| OpenRouter | `openrouter/anthropic/claude-opus-4-7` | `OPENROUTER_API_KEY` |
+| Mistral | `mistral/mistral-large-latest` | `MISTRAL_API_KEY` |
+| Ollama (local) | `ollama/llama3.3` | none, `OLLAMA_HOST` for remote |
+| LM Studio / llama.cpp | `openai/<your-model>` + `LLM_BASE_URL=http://localhost:...` | `OPENAI_API_KEY` (any string for fully local) |
+| Anything else | See [LiteLLM provider docs](https://docs.litellm.ai/docs/providers) | |
 
-The Streamlit UI ships with eleven provider presets (Anthropic, OpenAI, Gemini, Groq, Together AI, OpenRouter, Mistral La Plateforme, Ollama, LM Studio, llama.cpp server, Custom). Each preset auto-fills the base URL and a starter list of models, with a free-text override so any model name works even if it isn't in the dropdown.
+The Streamlit UI ships with eleven provider presets (Anthropic, OpenAI, Gemini, Groq, Together AI, OpenRouter, Mistral, Ollama, LM Studio, llama.cpp server, Custom). Each preset auto-fills the model prefix, a starter list of models, and the relevant key var. A free-text override lets you type any LiteLLM-supported model.
 
 Sidebar also exposes batch sizes (sender batch, top-sender cap, IMAP fetch size) under "Advanced settings" so you can tune for very large or very small inboxes without editing code.
-
-That covers most LLMs in use today. If you find one that needs custom logic, add it as below.
 
 ### Add a custom provider
 
