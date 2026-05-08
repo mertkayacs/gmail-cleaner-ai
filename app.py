@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -101,6 +102,20 @@ def run_subcommand(cmd, args, status_placeholder):
             st.code("\n".join(output[-200:]), language="text")
     rc = proc.wait()
     return rc, "\n".join(output)
+
+
+def file_age(path):
+    """Human-readable age of a file's last-modified time. None if missing."""
+    if not path.exists():
+        return None
+    elapsed = time.time() - path.stat().st_mtime
+    if elapsed < 60:
+        return "just now"
+    if elapsed < 3600:
+        return f"{int(elapsed // 60)}m ago"
+    if elapsed < 86400:
+        return f"{int(elapsed // 3600)}h ago"
+    return f"{int(elapsed // 86400)}d ago"
 
 
 def parse_list_file(path):
@@ -253,32 +268,38 @@ with st.container(border=True):
                     remove_env_keys([f"GMAIL_ACCOUNT_{slot}", f"GMAIL_APPPASS_{slot}"])
                     st.rerun()
 
-        with st.form("add_acc_form", clear_on_submit=True, border=False):
-            st.caption(
-                "Generate an App Password at [myaccount.google.com/apppasswords]"
-                "(https://myaccount.google.com/apppasswords). Requires 2-Step Verification. "
-                "Saved to your local `.env` (gitignored)."
-            )
-            new_email = st.text_input("Gmail address", placeholder="you@gmail.com")
-            new_pass = st.text_input(
-                "App Password",
-                type="password",
-                placeholder="16-char password from Google",
-            )
-            if st.form_submit_button("Add account", use_container_width=True, type="primary"):
-                if not new_email or not new_pass:
-                    st.error("Email and App Password both required.")
-                else:
-                    slot = next_account_slot()
-                    if slot is None:
-                        st.error("Account limit reached (20).")
+        # When accounts exist, hide the add form behind an expander so it doesn't
+        # dominate the column. New users (no accounts) see the form immediately.
+        add_form_container = (
+            st.expander("Add another account") if accounts_full else st.container()
+        )
+        with add_form_container:
+            with st.form("add_acc_form", clear_on_submit=True, border=False):
+                st.caption(
+                    "Generate an App Password at [myaccount.google.com/apppasswords]"
+                    "(https://myaccount.google.com/apppasswords). Requires 2-Step Verification. "
+                    "Saved to your local `.env` (gitignored)."
+                )
+                new_email = st.text_input("Gmail address", placeholder="you@gmail.com")
+                new_pass = st.text_input(
+                    "App Password",
+                    type="password",
+                    placeholder="16-char password from Google",
+                )
+                if st.form_submit_button("Add account", use_container_width=True, type="primary"):
+                    if not new_email or not new_pass:
+                        st.error("Email and App Password both required.")
                     else:
-                        update_env({
-                            f"GMAIL_ACCOUNT_{slot}": new_email.strip(),
-                            f"GMAIL_APPPASS_{slot}": new_pass.strip(),
-                        })
-                        st.success(f"Saved {new_email.strip()}.")
-                        st.rerun()
+                        slot = next_account_slot()
+                        if slot is None:
+                            st.error("Account limit reached (20).")
+                        else:
+                            update_env({
+                                f"GMAIL_ACCOUNT_{slot}": new_email.strip(),
+                                f"GMAIL_APPPASS_{slot}": new_pass.strip(),
+                            })
+                            st.success(f"Saved {new_email.strip()}.")
+                            st.rerun()
 
     # ---- LLM provider ----
     with setup_col_llm:
@@ -401,6 +422,12 @@ if not accounts:
 
 if len(accounts) == 1:
     account = accounts[0]
+    st.markdown(
+        f"<p style='margin: 16px 0 8px 0; color: #6b6357;'>"
+        f"Working on <code>{account}</code>"
+        f"</p>",
+        unsafe_allow_html=True,
+    )
 else:
     account = st.selectbox(
         "Pick which account to work on",
@@ -437,6 +464,7 @@ with st.container(border=True):
             )
     if inv_path.exists():
         inv = json.loads(inv_path.read_text())
+        st.caption(f"Last scanned {file_age(inv_path)}.")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total", f"{inv['total_mails']:,}")
         c2.metric("Senders", f"{inv['unique_senders']:,}")
@@ -494,7 +522,7 @@ with st.container(border=True):
 
     rev_col_a, rev_col_d = st.columns(2)
     with rev_col_a:
-        st.markdown(f"**Allowed (keep) — {len(df_a)} senders**")
+        st.markdown(f"**Allowed (keep), {len(df_a)} senders**")
         edited_a = st.data_editor(
             df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
         )
@@ -502,7 +530,7 @@ with st.container(border=True):
             write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
             st.success("Saved.")
     with rev_col_d:
-        st.markdown(f"**Disallowed (Trash) — {len(df_d)} senders**")
+        st.markdown(f"**Disallowed (Trash), {len(df_d)} senders**")
         edited_d = st.data_editor(
             df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
         )
@@ -559,13 +587,14 @@ with st.container(border=True):
                 )
 
     if log_path.exists():
+        st.caption(f"Last applied {file_age(log_path)}.")
         with st.expander("Audit log"):
             st.code(log_path.read_text(), language="text")
 
     st.markdown("---")
     st.markdown(
-        "**Generate Gmail filter XML** — import once per account in Gmail Settings → Filters → Import filters. "
-        "Future mail then auto-routes by sender, no LLM calls."
+        "**Generate Gmail filter XML.** Import once per account in Gmail Settings → Filters → Import filters. "
+        "Future mail auto-routes by sender, no LLM calls."
     )
     if st.button(
         "Generate filters.xml",
