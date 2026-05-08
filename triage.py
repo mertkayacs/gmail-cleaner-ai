@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""
+Gmail triage tool. Single-file Python program.
+
+Reads Gmail accounts via IMAP using App Passwords, classifies senders via the
+Anthropic API, applies labels and trash decisions back via IMAP. Per-account,
+debuggable, three subcommands: inventory, analyze, apply.
+
+Setup:
+  1. Generate an App Password per account at myaccount.google.com/apppasswords
+     (requires 2-Step Verification on the account)
+  2. Copy .env.example to .env and fill in
+  3. pip install -r requirements.txt   (or uv pip install -r requirements.txt)
+
+Usage:
+  python3 triage.py inventory <account-email>
+  python3 triage.py analyze   <account-email>
+  python3 triage.py apply     <account-email> [--dry-run]
+"""
+
+import argparse
+import imaplib
+import json
+import os
+import re
+import sys
+import textwrap
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from email import message_from_bytes
+from email.utils import parseaddr
+from pathlib import Path
+
+# anthropic and dotenv are lazy-imported inside the functions that need them
+# so that `triage.py --help` works without installing deps first.
+
+DATA_DIR = Path(__file__).parent / "data"
+MODEL = "claude-opus-4-7"
+SENDER_BATCH_SIZE = 50          # senders per Claude classification call
+TOP_SENDER_CAP = 200            # only classify top N senders by volume
+FETCH_BATCH_SIZE = 500          # IMAP fetch chunk size
+ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
+TRASH_FOLDER = '"[Gmail]/Trash"'
+
+
+# -------------------- Account loading -----------------------------------------
+
+def load_account(account_email):
+    """Find account in .env, return (email, app_password)."""
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+    for i in range(1, 21):
+        env_email = os.environ.get(f"GMAIL_ACCOUNT_{i}")
+        if env_email and env_email.lower() == account_email.lower():
+            password = os.environ.get(f"GMAIL_APPPASS_{i}")
+            if not password:
+                raise SystemExit(f"GMAIL_APPPASS_{i} missing in .env")
+            return env_email, password
+    raise SystemExit(
+        f"Account {account_email} not found in .env. "
+        f"Add as GMAIL_ACCOUNT_<n> with matching GMAIL_APPPASS_<n>."
+    )
+
+
+# -------------------- IMAP helpers --------------------------------------------
+
+def imap_connect(email_addr, password):
+    conn = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+    conn.login(email_addr, password)
+    return conn
+
+
+def parse_fetch_response(msg_data):
+    """Walk imaplib FETCH response, yield (uid, header_bytes) tuples."""
+    for entry in msg_data:
+        if isinstance(entry, tuple) and len(entry) >= 2:
+            envelope = entry[0]
+            header_bytes = entry[1]
+            if not isinstance(header_bytes, (bytes, bytearray)):
+                continue
+            envelope_str = envelope.decode(errors="ignore") if isinstance(envelope, (bytes, bytearray)) else str(envelope)
+            uid_match = re.search(r"UID (\d+)", envelope_str)
+            uid = uid_match.group(1) if uid_match else None
+            yield uid, bytes(header_bytes)
+
+
+def parse_headers(header_bytes):
+    msg = message_from_bytes(header_bytes)
+    return {
+        "from": msg.get("From", "") or "",
+        "subject": msg.get("Subject", "") or "",
+        "list_unsubscribe": msg.get("List-Unsubscribe", "") or "",
+    }
+
+
+def extract_sender(from_header):
+    _, addr = parseaddr(from_header)
+    return addr.lower().strip() if addr else ""
+
+
+def domain_of(email_addr):
+    return email_addr.split("@", 1)[1].lower() if "@" in email_addr else ""
+
+
+# -------------------- Inventory -----------------------------------------------
+
+def cmd_inventory(account_email):
+    email_addr, password = load_account(account_email)
+    print(f"Connecting to IMAP for {email_addr}...")
+    conn = imap_connect(email_addr, password)
+    try:
+        typ, _ = conn.select(ALL_MAIL_FOLDER, readonly=True)
+        if typ != "OK":
+            raise SystemExit(f"Could not select {ALL_MAIL_FOLDER}: {typ}")
+
+        print("Searching all mail...")
+        typ, data = conn.uid("SEARCH", None, "ALL")
+        if typ != "OK":
+            raise SystemExit(f"Search failed: {typ}")
+        uids = data[0].split()
+        total = len(uids)
+        print(f"Total mail: {total}")
+        if total == 0:
+            print("No mail found.")
+            return
+
+        senders = Counter()
+        domains = Counter()
+        has_unsubscribe = 0
+        samples = defaultdict(list)
+
+        n_batches = (total + FETCH_BATCH_SIZE - 1) // FETCH_BATCH_SIZE
+        for i, batch_start in enumerate(range(0, total, FETCH_BATCH_SIZE)):
+            batch_uids = uids[batch_start:batch_start + FETCH_BATCH_SIZE]
+            uid_set = b",".join(batch_uids).decode()
+            print(f"  Fetching batch {i + 1}/{n_batches} ({len(batch_uids)} mails)...")
+            typ, msg_data = conn.uid(
+                "FETCH",
+                uid_set,
+                "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT LIST-UNSUBSCRIBE)])",
+            )
+            if typ != "OK":
+                print(f"  Fetch failed: {typ}")
+                continue
+            for _uid, header_bytes in parse_fetch_response(msg_data):
+                hdrs = parse_headers(header_bytes)
+                sender = extract_sender(hdrs["from"])
+                if not sender:
+                    continue
+                senders[sender] += 1
+                d = domain_of(sender)
+                if d:
+                    domains[d] += 1
+                if hdrs["list_unsubscribe"]:
+                    has_unsubscribe += 1
+                if hdrs["subject"] and len(samples[sender]) < 5:
+                    samples[sender].append(hdrs["subject"][:200])
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+    out_dir = DATA_DIR / email_addr
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    inventory = {
+        "account": email_addr,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_mails": total,
+        "unique_senders": len(senders),
+        "unique_domains": len(domains),
+        "has_list_unsubscribe": has_unsubscribe,
+        "top_senders": senders.most_common(TOP_SENDER_CAP),
+        "top_domains": domains.most_common(50),
+        "sample_subjects": {s: subjs for s, subjs in samples.items()
+                            if s in dict(senders.most_common(TOP_SENDER_CAP))},
+    }
+    (out_dir / "inventory.json").write_text(json.dumps(inventory, indent=2, default=str))
+
+    pct = (has_unsubscribe * 100 // total) if total else 0
+    report_lines = [
+        f"# Inventory Report: {email_addr}",
+        "",
+        f"Generated: {inventory['generated_at']}",
+        "",
+        "## Totals",
+        f"- Total mails: {total}",
+        f"- Unique senders: {len(senders)}",
+        f"- Unique domains: {len(domains)}",
+        f"- Has List-Unsubscribe header: {has_unsubscribe} ({pct}%)",
+        "",
+        "## Top 50 senders",
+        "",
+        "| Count | Sender |",
+        "|---|---|",
+    ]
+    for sender, count in senders.most_common(50):
+        report_lines.append(f"| {count} | {sender} |")
+    report_lines += ["", "## Top 25 domains", "", "| Count | Domain |", "|---|---|"]
+    for domain, count in domains.most_common(25):
+        report_lines.append(f"| {count} | {domain} |")
+    (out_dir / "report.md").write_text("\n".join(report_lines) + "\n")
+
+    print(f"\nInventory: {out_dir}/inventory.json")
+    print(f"Report:    {out_dir}/report.md")
+
+
+# -------------------- Analyze -------------------------------------------------
+
+def build_classification_prompt(batch_pairs, samples):
+    items = []
+    for sender, count in batch_pairs:
+        items.append({
+            "sender": sender,
+            "count": count,
+            "sample_subjects": samples.get(sender, [])[:3],
+        })
+    return textwrap.dedent("""\
+        You are classifying email senders for a personal Gmail organization system.
+
+        For each sender below, decide:
+        - category: one of keep_personal, keep_work, keep_security, keep_transactional, keep_calendar, keep_newsletter, keep_other, junk_promo, junk_spam, junk_low_newsletter, junk_notification, junk_other.
+        - sublabel: a descriptive sub-label like "Personal/Family", "Work/<company>", "Newsletter/Tech", "Junk/Promo".
+        - confidence: integer 0-100.
+        - reasoning: one short sentence.
+
+        Rules:
+        - keep_security covers 2FA, password resets, security alerts, bank security, government auth.
+        - keep_transactional covers receipts, invoices, shipping confirmations, order confirmations.
+        - junk_promo is marketing, sales, discount campaigns, list-unsubscribable bulk mail with no sign of personal value.
+        - If sender is a noreply automated address with no clear value, junk_notification.
+        - If newsletter-shaped but might be useful, keep_newsletter.
+        - When in doubt, lean keep_* over junk_*. Better to keep one extra than wrongly trash important.
+        - If confidence below 70 on a junk_* category, fallback to keep_other.
+
+        Output strictly as a JSON object with sender as key. Example:
+        {"foo@bar.com": {"category": "keep_work", "sublabel": "Work/Acme", "confidence": 85, "reasoning": "Recurring sender with personalized subject lines."}}
+
+        Senders to classify (with mail count and sample subjects):
+        """) + json.dumps(items, indent=2) + "\n\nReturn the JSON object only, no surrounding text."
+
+
+def cmd_analyze(account_email):
+    out_dir = DATA_DIR / account_email
+    inv_path = out_dir / "inventory.json"
+    if not inv_path.exists():
+        raise SystemExit(f"No inventory at {inv_path}. Run `inventory` first.")
+    inventory = json.loads(inv_path.read_text())
+    top_senders = inventory["top_senders"]
+    samples = inventory.get("sample_subjects", {})
+
+    import anthropic
+    from dotenv import load_dotenv
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        load_dotenv(Path(__file__).parent / ".env")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise SystemExit("ANTHROPIC_API_KEY missing in environment or .env")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    all_classifications = {}
+    n_batches = (len(top_senders) + SENDER_BATCH_SIZE - 1) // SENDER_BATCH_SIZE
+    for i in range(0, len(top_senders), SENDER_BATCH_SIZE):
+        batch = top_senders[i:i + SENDER_BATCH_SIZE]
+        print(f"Classifying batch {i // SENDER_BATCH_SIZE + 1}/{n_batches} "
+              f"({len(batch)} senders)...")
+        prompt = build_classification_prompt(batch, samples)
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(block.text for block in resp.content if hasattr(block, "text"))
+        try:
+            classifications = json.loads(text)
+        except json.JSONDecodeError:
+            m = re.search(r"\{.*\}", text, re.DOTALL)
+            if not m:
+                print(f"  Could not parse JSON from response: {text[:200]}")
+                continue
+            try:
+                classifications = json.loads(m.group())
+            except json.JSONDecodeError as e:
+                print(f"  Could not parse JSON after extraction: {e}")
+                continue
+        all_classifications.update(classifications)
+
+    by_category = defaultdict(list)
+    allowed = []
+    disallowed = []
+    for sender, info in all_classifications.items():
+        cat = info.get("category", "keep_other")
+        by_category[cat].append(sender)
+        line = (sender, info.get("sublabel", ""), info.get("reasoning", ""))
+        if cat.startswith("junk_"):
+            disallowed.append(line)
+        else:
+            allowed.append(line)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "proposed_categories.json").write_text(json.dumps({
+        "categories": dict(by_category),
+        "sender_assignments": all_classifications,
+    }, indent=2))
+
+    def write_list(path, header, rows):
+        lines = [
+            f"# {header}",
+            "# Format: sender@domain | sublabel | reasoning",
+            "# Edit before running `apply`. Lines starting with # are ignored.",
+            "",
+        ]
+        for sender, sublabel, reasoning in sorted(rows):
+            lines.append(f"{sender} | {sublabel} | {reasoning}")
+        path.write_text("\n".join(lines) + "\n")
+
+    write_list(out_dir / "allowed.txt", "Allowed senders (keep)", allowed)
+    write_list(out_dir / "disallowed.txt", "Disallowed senders (move to Trash)", disallowed)
+
+    print(f"\nProposed categories: {out_dir}/proposed_categories.json")
+    print(f"Allowed list ({len(allowed)} senders): {out_dir}/allowed.txt")
+    print(f"Disallowed list ({len(disallowed)} senders): {out_dir}/disallowed.txt")
+    print("\nReview and edit allowed.txt and disallowed.txt before running `apply`.")
+
+
+# -------------------- Apply ---------------------------------------------------
+
+def parse_list_file(path):
+    """Parse list file. Returns dict sender -> sublabel."""
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        sender = parts[0].lower()
+        sublabel = parts[1] if len(parts) > 1 else ""
+        if sender:
+            out[sender] = sublabel
+    return out
+
+
+def cmd_apply(account_email, dry_run):
+    out_dir = DATA_DIR / account_email
+    allowed = parse_list_file(out_dir / "allowed.txt")
+    disallowed = parse_list_file(out_dir / "disallowed.txt")
+    if not allowed and not disallowed:
+        raise SystemExit("Run `analyze` first or populate allowed.txt and disallowed.txt.")
+
+    print(f"Allowed senders: {len(allowed)}")
+    print(f"Disallowed senders: {len(disallowed)}")
+    if dry_run:
+        print("DRY RUN: no IMAP changes will be made.\n")
+    else:
+        print()
+
+    email_addr, password = load_account(account_email)
+    conn = imap_connect(email_addr, password)
+    log_lines = []
+    log_lines.append(f"# Apply log: {email_addr}")
+    log_lines.append(f"# {datetime.now(timezone.utc).isoformat()}")
+    log_lines.append(f"# dry_run: {dry_run}")
+    log_lines.append("")
+
+    try:
+        typ, _ = conn.select(ALL_MAIL_FOLDER)
+        if typ != "OK":
+            raise SystemExit(f"Could not select {ALL_MAIL_FOLDER}: {typ}")
+
+        # Apply labels for allowed senders
+        for sender, sublabel in sorted(allowed.items()):
+            if not sublabel:
+                continue
+            typ, data = conn.uid("SEARCH", None, "FROM", f'"{sender}"')
+            if typ != "OK":
+                continue
+            uids = data[0].split()
+            if not uids:
+                continue
+            uid_set = b",".join(uids).decode()
+            msg = f"  KEEP {sender} ({len(uids)} mails) -> label '{sublabel}'"
+            print(msg)
+            log_lines.append(msg)
+            if not dry_run:
+                conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{sublabel}")')
+
+        # Move disallowed senders to Trash
+        for sender, sublabel in sorted(disallowed.items()):
+            typ, data = conn.uid("SEARCH", None, "FROM", f'"{sender}"')
+            if typ != "OK":
+                continue
+            uids = data[0].split()
+            if not uids:
+                continue
+            uid_set = b",".join(uids).decode()
+            label_to_apply = sublabel or "Junk/Other"
+            msg = f"  TRASH {sender} ({len(uids)} mails) -> label '{label_to_apply}', move to Trash"
+            print(msg)
+            log_lines.append(msg)
+            if not dry_run:
+                conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{label_to_apply}")')
+                conn.uid("MOVE", uid_set, TRASH_FOLDER)
+    finally:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+
+    log_path = out_dir / "applied.log"
+    if log_path.exists():
+        existing = log_path.read_text()
+        log_path.write_text(existing + "\n" + "\n".join(log_lines) + "\n")
+    else:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("\n".join(log_lines) + "\n")
+
+    print(f"\n{'Dry run complete' if dry_run else 'Apply complete'}. Log: {log_path}")
+
+
+# -------------------- Entrypoint ----------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Gmail triage tool. Inventory, analyze, apply per account."
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_inv = sub.add_parser("inventory", help="Read mail metadata, compute stats")
+    p_inv.add_argument("account", help="Gmail account email")
+
+    p_an = sub.add_parser("analyze", help="Classify top senders via Anthropic API")
+    p_an.add_argument("account", help="Gmail account email")
+
+    p_ap = sub.add_parser("apply", help="Apply labels and Trash via IMAP")
+    p_ap.add_argument("account", help="Gmail account email")
+    p_ap.add_argument("--dry-run", action="store_true", help="Show actions, do not modify")
+
+    args = parser.parse_args()
+    if args.cmd == "inventory":
+        cmd_inventory(args.account)
+    elif args.cmd == "analyze":
+        cmd_analyze(args.account)
+    elif args.cmd == "apply":
+        cmd_apply(args.account, dry_run=args.dry_run)
+
+
+if __name__ == "__main__":
+    main()
