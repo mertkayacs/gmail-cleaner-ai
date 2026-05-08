@@ -571,32 +571,37 @@ with st.container(border=True):
     section_heading("review")
     review_ready = allowed_path.exists() or disallowed_path.exists()
     if not review_ready:
-        st.caption("Run classify first. Tables below populate from the model's output.")
-    st.markdown(
-        "Edit each table and click its save button. Move a sender between allowed and "
-        "disallowed by editing the row. The apply step reads these files."
-    )
-
-    df_a = parse_list_file(allowed_path)
-    df_d = parse_list_file(disallowed_path)
-
-    rev_col_a, rev_col_d = st.columns(2)
-    with rev_col_a:
-        st.markdown(f"**allowed (keep), {len(df_a)} senders**")
-        edited_a = st.data_editor(
-            df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+        st.caption(
+            "No senders to review yet. Run classify above and the model's output "
+            "will split into two editable lists here: allowed (keep, get sublabels) "
+            "and disallowed (move to Trash)."
         )
-        if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
-            write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
-            st.success("Saved.")
-    with rev_col_d:
-        st.markdown(f"**disallowed (trash), {len(df_d)} senders**")
-        edited_d = st.data_editor(
-            df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+    else:
+        st.markdown(
+            "Edit each table and click its save button. Move a sender between allowed "
+            "and disallowed by editing the row. The apply step reads these files."
         )
-        if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
-            write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
-            st.success("Saved.")
+
+        df_a = parse_list_file(allowed_path)
+        df_d = parse_list_file(disallowed_path)
+
+        rev_col_a, rev_col_d = st.columns(2)
+        with rev_col_a:
+            st.markdown(f"**allowed (keep), {len(df_a)} senders**")
+            edited_a = st.data_editor(
+                df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+            )
+            if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
+                write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
+                st.success("Saved.")
+        with rev_col_d:
+            st.markdown(f"**disallowed (trash), {len(df_d)} senders**")
+            edited_d = st.data_editor(
+                df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+            )
+            if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
+                write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
+                st.success("Saved.")
 
 
 # ============== Card 4: Apply ==============
