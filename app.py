@@ -231,7 +231,7 @@ st.markdown(
     "<p style='color: #6b6357; margin-top: 4px;'>"
     "Sender-level Gmail cleanup. IMAP read, LLM classify, label, trash. "
     "BYOK, MIT, "
-    "<a href='https://github.com/mertkayacs/gmail-cleaner-ai' style='color: #b85c00;'>github</a>."
+    "<a href='https://github.com/mertkayacs/gmail-cleaner-ai' style='color: #9b4d00;'>github</a>."
     "</p>",
     unsafe_allow_html=True,
 )
