@@ -204,7 +204,7 @@ PRESETS = {
 
 # ============== Page header ==============
 
-st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="centered")
+st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="wide")
 
 st.title(":mailbox: gmail-cleaner-ai")
 
@@ -232,116 +232,121 @@ st.markdown(
 
 with st.container(border=True):
     st.subheader("1. Setup")
+    setup_col_acc, setup_col_llm = st.columns(2)
 
     # ---- Gmail accounts ----
-    st.markdown("**Gmail accounts**")
+    with setup_col_acc:
+        st.markdown("**Gmail accounts**")
 
-    if accounts_full:
-        for slot, email in accounts_full:
-            cols = st.columns([5, 1])
-            cols[0].markdown(f":white_check_mark: `{email}`")
-            if cols[1].button("Remove", key=f"rm_acc_{slot}"):
-                remove_env_keys([f"GMAIL_ACCOUNT_{slot}", f"GMAIL_APPPASS_{slot}"])
-                st.rerun()
-
-    with st.form("add_acc_form", clear_on_submit=True):
-        st.caption(
-            "Generate an App Password at [myaccount.google.com/apppasswords]"
-            "(https://myaccount.google.com/apppasswords). Requires 2-Step Verification. "
-            "Saved to your local `.env` (gitignored)."
-        )
-        new_email = st.text_input("Gmail address", placeholder="you@gmail.com")
-        new_pass = st.text_input(
-            "App Password",
-            type="password",
-            placeholder="16-char password from Google",
-        )
-        if st.form_submit_button("Add account", use_container_width=True, type="primary"):
-            if not new_email or not new_pass:
-                st.error("Email and App Password both required.")
-            else:
-                slot = next_account_slot()
-                if slot is None:
-                    st.error("Account limit reached (20).")
-                else:
-                    update_env({
-                        f"GMAIL_ACCOUNT_{slot}": new_email.strip(),
-                        f"GMAIL_APPPASS_{slot}": new_pass.strip(),
-                    })
-                    st.success(f"Saved {new_email.strip()}.")
+        if accounts_full:
+            for slot, email in accounts_full:
+                cols = st.columns([5, 1])
+                cols[0].markdown(f":white_check_mark: `{email}`")
+                if cols[1].button("Remove", key=f"rm_acc_{slot}"):
+                    remove_env_keys([f"GMAIL_ACCOUNT_{slot}", f"GMAIL_APPPASS_{slot}"])
                     st.rerun()
 
-    st.markdown("---")
+        with st.form("add_acc_form", clear_on_submit=True):
+            st.caption(
+                "Generate an App Password at [myaccount.google.com/apppasswords]"
+                "(https://myaccount.google.com/apppasswords). Requires 2-Step Verification. "
+                "Saved to your local `.env` (gitignored)."
+            )
+            new_email = st.text_input("Gmail address", placeholder="you@gmail.com")
+            new_pass = st.text_input(
+                "App Password",
+                type="password",
+                placeholder="16-char password from Google",
+            )
+            if st.form_submit_button("Add account", use_container_width=True, type="primary"):
+                if not new_email or not new_pass:
+                    st.error("Email and App Password both required.")
+                else:
+                    slot = next_account_slot()
+                    if slot is None:
+                        st.error("Account limit reached (20).")
+                    else:
+                        update_env({
+                            f"GMAIL_ACCOUNT_{slot}": new_email.strip(),
+                            f"GMAIL_APPPASS_{slot}": new_pass.strip(),
+                        })
+                        st.success(f"Saved {new_email.strip()}.")
+                        st.rerun()
 
     # ---- LLM provider ----
-    st.markdown("**LLM provider**")
-    preset_name = st.selectbox(
-        "Provider",
-        list(PRESETS.keys()),
-        label_visibility="collapsed",
-    )
-    preset = PRESETS[preset_name]
+    with setup_col_llm:
+        st.markdown("**LLM provider**")
+        preset_name = st.selectbox(
+            "Provider",
+            list(PRESETS.keys()),
+            label_visibility="collapsed",
+        )
+        preset = PRESETS[preset_name]
 
-    if preset["models"]:
-        selected_model = st.selectbox("Model", preset["models"])
-    else:
-        selected_model = ""
-    custom_model = st.text_input(
-        "Custom model (overrides above)",
-        "",
-        placeholder="any LiteLLM-supported model name",
-    )
-    model = custom_model.strip() or selected_model
-
-    base_url = preset.get("base_url") or ""
-    if preset_name == "Custom (any LiteLLM model)":
-        base_url = st.text_input("Base URL", base_url, placeholder="https://your-provider.com/v1")
-    elif base_url:
-        st.caption(f"Base URL: `{base_url}`")
-
-    is_ollama = preset_name.startswith("Ollama")
-    ollama_host = ""
-    if is_ollama:
-        ollama_host = st.text_input("Ollama host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
-
-    key_var = preset.get("key_var")
-    if key_var:
-        existing_key = os.environ.get(key_var, "")
-        if existing_key:
-            masked = (existing_key[:6] + "…" + existing_key[-4:]) if len(existing_key) > 12 else "set"
-            st.markdown(f":white_check_mark: `{key_var}` set ({masked})")
+        if preset["models"]:
+            selected_model = st.selectbox("Model", preset["models"])
         else:
-            url = preset.get("key_url")
-            msg = f":x: `{key_var}` not set"
-            if url:
-                msg += f" — get one at [{url}]({url})"
-            st.markdown(msg)
-        with st.form(f"set_key_form_{key_var}", clear_on_submit=True):
-            new_key = st.text_input(
-                f"Paste {key_var}",
-                type="password",
-                label_visibility="collapsed",
-                placeholder=f"paste {key_var} here",
-            )
-            if st.form_submit_button("Save key", use_container_width=True, type="primary"):
-                if not new_key:
-                    st.error("Key required.")
-                else:
-                    update_env({key_var: new_key.strip()})
-                    st.success(f"Saved {key_var}.")
-                    st.rerun()
-    elif is_ollama:
-        url = preset.get("key_url")
-        note = "Ollama runs locally, no API key needed"
-        if url:
-            note += f". Install from [{url}]({url})"
-        st.caption(f":information_source: {note}")
+            selected_model = ""
+        custom_model = st.text_input(
+            "Custom model (overrides above)",
+            "",
+            placeholder="any LiteLLM-supported model name",
+        )
+        model = custom_model.strip() or selected_model
 
-    # Advanced (small expander inside the Setup card, off by default)
+        base_url = preset.get("base_url") or ""
+        if preset_name == "Custom (any LiteLLM model)":
+            base_url = st.text_input("Base URL", base_url, placeholder="https://your-provider.com/v1")
+        elif base_url:
+            st.caption(f"Base URL: `{base_url}`")
+
+        is_ollama = preset_name.startswith("Ollama")
+        ollama_host = ""
+        if is_ollama:
+            ollama_host = st.text_input("Ollama host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
+
+        key_var = preset.get("key_var")
+        if key_var:
+            existing_key = os.environ.get(key_var, "")
+            if existing_key:
+                masked = (existing_key[:6] + "…" + existing_key[-4:]) if len(existing_key) > 12 else "set"
+                st.markdown(f":white_check_mark: `{key_var}` set ({masked})")
+            else:
+                url = preset.get("key_url")
+                msg = f":x: `{key_var}` not set"
+                if url:
+                    msg += f" — get one at [{url}]({url})"
+                st.markdown(msg)
+            with st.form(f"set_key_form_{key_var}", clear_on_submit=True):
+                new_key = st.text_input(
+                    f"Paste {key_var}",
+                    type="password",
+                    label_visibility="collapsed",
+                    placeholder=f"paste {key_var} here",
+                )
+                if st.form_submit_button("Save key", use_container_width=True, type="primary"):
+                    if not new_key:
+                        st.error("Key required.")
+                    else:
+                        update_env({key_var: new_key.strip()})
+                        st.success(f"Saved {key_var}.")
+                        st.rerun()
+        elif is_ollama:
+            url = preset.get("key_url")
+            note = "Ollama runs locally, no API key needed"
+            if url:
+                note += f". Install from [{url}]({url})"
+            st.caption(f":information_source: {note}")
+
+    # Advanced (small expander, full-width within the card)
     with st.expander("Advanced (batch sizes)"):
-        sender_batch_size = st.number_input("Sender batch size", min_value=1, max_value=500, value=50, step=10)
-        top_sender_cap = st.number_input("Top sender cap", min_value=10, max_value=2000, value=200, step=50)
-        fetch_batch_size = st.number_input("IMAP fetch batch size", min_value=50, max_value=2000, value=500, step=50)
+        adv1, adv2, adv3 = st.columns(3)
+        with adv1:
+            sender_batch_size = st.number_input("Sender batch size", min_value=1, max_value=500, value=50, step=10)
+        with adv2:
+            top_sender_cap = st.number_input("Top sender cap", min_value=10, max_value=2000, value=200, step=50)
+        with adv3:
+            fetch_batch_size = st.number_input("IMAP fetch batch size", min_value=50, max_value=2000, value=500, step=50)
 
 
 # Persist runtime settings to session
@@ -455,21 +460,23 @@ with st.container(border=True):
     df_a = parse_list_file(allowed_path)
     df_d = parse_list_file(disallowed_path)
 
-    st.markdown(f"**Allowed (keep) — {len(df_a)} senders**")
-    edited_a = st.data_editor(
-        df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
-    )
-    if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
-        write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
-        st.success("Saved.")
-
-    st.markdown(f"**Disallowed (Trash) — {len(df_d)} senders**")
-    edited_d = st.data_editor(
-        df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
-    )
-    if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
-        write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
-        st.success("Saved.")
+    rev_col_a, rev_col_d = st.columns(2)
+    with rev_col_a:
+        st.markdown(f"**Allowed (keep) — {len(df_a)} senders**")
+        edited_a = st.data_editor(
+            df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+        )
+        if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
+            write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
+            st.success("Saved.")
+    with rev_col_d:
+        st.markdown(f"**Disallowed (Trash) — {len(df_d)} senders**")
+        edited_d = st.data_editor(
+            df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+        )
+        if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
+            write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
+            st.success("Saved.")
 
 
 # ============== Card 4: Apply ==============
@@ -484,36 +491,38 @@ with st.container(border=True):
         "**Trash is recoverable for 30 days**, then Gmail auto-purges."
     )
 
-    if st.button(
-        "Dry-run (preview only)",
-        use_container_width=True,
-        disabled=apply_disabled,
-        key="btn_dry",
-    ):
-        with st.status(f"Dry-run on {account}...", expanded=True) as status:
-            rc, _ = run_subcommand("apply", [account, "--dry-run"], st.empty())
-            status.update(
-                label="Dry-run done." if rc == 0 else f"Failed (exit {rc}).",
-                state="complete" if rc == 0 else "error",
-            )
-
-    confirm_live = st.checkbox(
-        "I understand: this writes to Gmail (Trash recoverable 30 days)",
-        key="confirm_live",
-    )
-    if st.button(
-        "Apply LIVE",
-        type="primary",
-        use_container_width=True,
-        disabled=apply_disabled or not confirm_live,
-        key="btn_live",
-    ):
-        with st.status(f"Applying on {account}...", expanded=True) as status:
-            rc, _ = run_subcommand("apply", [account], st.empty())
-            status.update(
-                label="Apply done." if rc == 0 else f"Failed (exit {rc}).",
-                state="complete" if rc == 0 else "error",
-            )
+    apply_col_dry, apply_col_live = st.columns(2)
+    with apply_col_dry:
+        if st.button(
+            "Dry-run (preview only)",
+            use_container_width=True,
+            disabled=apply_disabled,
+            key="btn_dry",
+        ):
+            with st.status(f"Dry-run on {account}...", expanded=True) as status:
+                rc, _ = run_subcommand("apply", [account, "--dry-run"], st.empty())
+                status.update(
+                    label="Dry-run done." if rc == 0 else f"Failed (exit {rc}).",
+                    state="complete" if rc == 0 else "error",
+                )
+    with apply_col_live:
+        confirm_live = st.checkbox(
+            "I understand: this writes to Gmail (Trash recoverable 30 days)",
+            key="confirm_live",
+        )
+        if st.button(
+            "Apply LIVE",
+            type="primary",
+            use_container_width=True,
+            disabled=apply_disabled or not confirm_live,
+            key="btn_live",
+        ):
+            with st.status(f"Applying on {account}...", expanded=True) as status:
+                rc, _ = run_subcommand("apply", [account], st.empty())
+                status.update(
+                    label="Apply done." if rc == 0 else f"Failed (exit {rc}).",
+                    state="complete" if rc == 0 else "error",
+                )
 
     if log_path.exists():
         with st.expander("Audit log"):
