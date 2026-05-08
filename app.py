@@ -283,9 +283,18 @@ with st.container(border=True):
     # ---- LLM provider ----
     with setup_col_llm:
         st.markdown("**LLM provider**")
+        # Smart default: preselect first preset whose key var is already set.
+        preset_keys_list = list(PRESETS.keys())
+        default_idx = 0
+        for i, name in enumerate(preset_keys_list):
+            kv = PRESETS[name].get("key_var")
+            if kv and os.environ.get(kv):
+                default_idx = i
+                break
         preset_name = st.selectbox(
             "Provider",
-            list(PRESETS.keys()),
+            preset_keys_list,
+            index=default_idx,
             label_visibility="collapsed",
         )
         preset = PRESETS[preset_name]
@@ -422,8 +431,9 @@ with st.container(border=True):
         ) as status:
             rc, _ = run_subcommand("inventory", [account], st.empty())
             status.update(
-                label="Scan done." if rc == 0 else f"Scan failed (exit {rc}).",
+                label="Scan done." if rc == 0 else f"Scan failed (exit {rc}). Check log above.",
                 state="complete" if rc == 0 else "error",
+                expanded=rc != 0,  # keep open on error so user sees why
             )
     if inv_path.exists():
         inv = json.loads(inv_path.read_text())
@@ -448,8 +458,9 @@ with st.container(border=True):
         with st.status(f"Classifying senders for {account}...", expanded=True) as status:
             rc, _ = run_subcommand("analyze", [account], st.empty())
             status.update(
-                label="Classification done." if rc == 0 else f"Failed (exit {rc}).",
+                label="Classification done." if rc == 0 else f"Classification failed (exit {rc}). Check log above.",
                 state="complete" if rc == 0 else "error",
+                expanded=rc != 0,
             )
     if classify_disabled:
         st.caption("Run the scan first.")
@@ -523,8 +534,9 @@ with st.container(border=True):
             with st.status(f"Dry-run on {account}...", expanded=True) as status:
                 rc, _ = run_subcommand("apply", [account, "--dry-run"], st.empty())
                 status.update(
-                    label="Dry-run done." if rc == 0 else f"Failed (exit {rc}).",
+                    label="Dry-run done." if rc == 0 else f"Dry-run failed (exit {rc}). Check log above.",
                     state="complete" if rc == 0 else "error",
+                    expanded=rc != 0,
                 )
     with apply_col_live:
         confirm_live = st.checkbox(
@@ -541,8 +553,9 @@ with st.container(border=True):
             with st.status(f"Applying on {account}...", expanded=True) as status:
                 rc, _ = run_subcommand("apply", [account], st.empty())
                 status.update(
-                    label="Apply done." if rc == 0 else f"Failed (exit {rc}).",
+                    label="Apply done." if rc == 0 else f"Apply failed (exit {rc}). Check log above.",
                     state="complete" if rc == 0 else "error",
+                    expanded=rc != 0,
                 )
 
     if log_path.exists():
@@ -563,8 +576,9 @@ with st.container(border=True):
         with st.status("Generating XML...", expanded=False) as status:
             rc, _ = run_subcommand("export-filters", [account], st.empty())
             status.update(
-                label="Generated." if rc == 0 else f"Failed (exit {rc}).",
+                label="Generated." if rc == 0 else f"Generation failed (exit {rc}). Check log above.",
                 state="complete" if rc == 0 else "error",
+                expanded=rc != 0,
             )
     if xml_path.exists():
         st.download_button(
