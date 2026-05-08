@@ -345,32 +345,37 @@ st.session_state["SENDER_BATCH_SIZE"] = str(sender_batch_size)
 st.session_state["TOP_SENDER_CAP"] = str(top_sender_cap)
 st.session_state["FETCH_BATCH_SIZE"] = str(fetch_batch_size)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Run")
-run_inv = st.sidebar.button("Run inventory", use_container_width=True)
-run_an = st.sidebar.button("Run analyze", use_container_width=True)
-run_dry = st.sidebar.button("Run apply (dry-run)", use_container_width=True)
-run_live = st.sidebar.button("Run apply (LIVE)", use_container_width=True, type="primary")
+# ============== Main area ==============
+# Action buttons live INSIDE each tab so they are visible on mobile (sidebar collapses by default).
 
-# ============== Main ==============
-
-st.title(f":mailbox: {account}")
+st.markdown(f"### Account: `{account}`")
 
 tab_inv, tab_an, tab_lists, tab_apply = st.tabs(
-    ["Inventory", "Analyze", "Lists", "Apply log"]
+    ["1. Inventory", "2. Analyze", "3. Lists", "4. Apply"]
 )
 
 acc_dir = DATA_DIR / account
+inv_path = acc_dir / "inventory.json"
+cats_path = acc_dir / "proposed_categories.json"
+allowed_path = acc_dir / "allowed.txt"
+disallowed_path = acc_dir / "disallowed.txt"
+log_path = acc_dir / "applied.log"
+xml_path = acc_dir / "filters.xml"
 
+
+# ---- Tab 1: Inventory ----
 with tab_inv:
-    if run_inv:
-        st.info(f"Running inventory on {account}...")
-        rc, _ = run_subcommand("inventory", [account], st.empty())
-        if rc == 0:
-            st.success("Inventory done.")
-        else:
-            st.error(f"Inventory failed (exit {rc}).")
-    inv_path = acc_dir / "inventory.json"
+    st.markdown(
+        "Read every mail's metadata via IMAP and compute stats. "
+        "**No writes to Gmail. No LLM calls. No cost.**"
+    )
+    if st.button("Run inventory", type="primary", use_container_width=True, key="btn_inv"):
+        with st.status(f"Running inventory on {account} (this can take a few minutes for big inboxes)...", expanded=True) as status:
+            rc, _ = run_subcommand("inventory", [account], st.empty())
+            if rc == 0:
+                status.update(label="Inventory done.", state="complete")
+            else:
+                status.update(label=f"Inventory failed (exit {rc}).", state="error")
     if inv_path.exists():
         inv = json.loads(inv_path.read_text())
         col1, col2, col3, col4 = st.columns(4)
@@ -387,17 +392,31 @@ with tab_inv:
         df_dom = pd.DataFrame(inv["top_domains"][:25], columns=["domain", "count"])
         st.dataframe(df_dom, use_container_width=True, hide_index=True)
     else:
-        st.info("No inventory yet. Click 'Run inventory' in the sidebar.")
+        st.info("No inventory yet. Click **Run inventory** above to scan your mailbox.")
 
+
+# ---- Tab 2: Analyze ----
 with tab_an:
-    if run_an:
-        st.info(f"Running analyze on {account} (model={model or 'default'})...")
-        rc, _ = run_subcommand("analyze", [account], st.empty())
-        if rc == 0:
-            st.success("Analyze done. Review the Lists tab.")
-        else:
-            st.error(f"Analyze failed (exit {rc}).")
-    cats_path = acc_dir / "proposed_categories.json"
+    st.markdown(
+        f"Classify the top senders via `{model or 'default model'}`. "
+        "**Subject + sender + sample subjects sent to the LLM. No message body.**"
+    )
+    analyze_disabled = not inv_path.exists()
+    if analyze_disabled:
+        st.warning("Run inventory first (Tab 1).")
+    if st.button(
+        "Run analyze",
+        type="primary",
+        use_container_width=True,
+        disabled=analyze_disabled,
+        key="btn_an",
+    ):
+        with st.status(f"Running analyze on {account}...", expanded=True) as status:
+            rc, _ = run_subcommand("analyze", [account], st.empty())
+            if rc == 0:
+                status.update(label="Analyze done. Review the Lists tab.", state="complete")
+            else:
+                status.update(label=f"Analyze failed (exit {rc}).", state="error")
     if cats_path.exists():
         cats = json.loads(cats_path.read_text())
         st.subheader("Categories proposed")
@@ -410,14 +429,18 @@ with tab_an:
             use_container_width=True,
             hide_index=True,
         )
+    else:
+        st.info("No analysis yet. Click **Run analyze** above.")
 
+
+# ---- Tab 3: Lists ----
 with tab_lists:
+    if not allowed_path.exists() and not disallowed_path.exists():
+        st.info("Run inventory and analyze first (tabs 1 and 2). The lists below populate from analyze.")
     st.markdown(
-        "Edit either list and click **Save**. The `apply` step reads these files. "
-        "Move a sender between lists or change its sublabel anytime."
+        "Edit either list and click **Save**. "
+        "The Apply step reads these files. Move a sender between lists or change a sublabel any time."
     )
-    allowed_path = acc_dir / "allowed.txt"
-    disallowed_path = acc_dir / "disallowed.txt"
 
     col_a, col_d = st.columns(2)
     with col_a:
@@ -426,62 +449,94 @@ with tab_lists:
         edited_a = st.data_editor(
             df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
         )
-        if st.button("Save allowed"):
+        if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
             write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
             st.success("Saved.")
     with col_d:
-        st.subheader("Disallowed (move to Trash)")
+        st.subheader("Disallowed (Trash)")
         df_d = parse_list_file(disallowed_path)
         edited_d = st.data_editor(
             df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
         )
-        if st.button("Save disallowed"):
+        if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
             write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
             st.success("Saved.")
 
+
+# ---- Tab 4: Apply ----
 with tab_apply:
-    if run_dry:
-        st.info(f"Dry-run apply on {account}...")
-        rc, _ = run_subcommand("apply", [account, "--dry-run"], st.empty())
-        if rc == 0:
-            st.success("Dry-run done.")
-        else:
-            st.error(f"Dry-run failed (exit {rc}).")
-    if run_live:
-        confirm = st.checkbox(
-            "I understand this will modify Gmail (apply labels, move to Trash). "
-            "Mail in Trash is recoverable for 30 days, then auto-purged."
+    apply_disabled = not (allowed_path.exists() or disallowed_path.exists())
+    if apply_disabled:
+        st.warning("Run analyze first (Tab 2). Apply needs the lists.")
+    st.markdown(
+        "Apply your reviewed lists to Gmail. Allowed senders get their sublabels. "
+        "Disallowed senders' mail moves to Trash. **Trash is recoverable for 30 days**, "
+        "then Gmail auto-purges."
+    )
+
+    col_dry, col_live = st.columns(2)
+    with col_dry:
+        if st.button(
+            "Dry-run (preview only)",
+            use_container_width=True,
+            disabled=apply_disabled,
+            key="btn_dry",
+            help="Show what would happen. No Gmail changes.",
+        ):
+            with st.status(f"Dry-run on {account}...", expanded=True) as status:
+                rc, _ = run_subcommand("apply", [account, "--dry-run"], st.empty())
+                if rc == 0:
+                    status.update(label="Dry-run done.", state="complete")
+                else:
+                    status.update(label=f"Failed (exit {rc}).", state="error")
+    with col_live:
+        confirm_live = st.checkbox(
+            "I understand: this writes to Gmail (Trash recoverable 30 days)",
+            key="confirm_live",
         )
-        if confirm and st.button("Confirm and apply LIVE", type="primary"):
-            rc, _ = run_subcommand("apply", [account], st.empty())
-            if rc == 0:
-                st.success("Apply done.")
-            else:
-                st.error(f"Apply failed (exit {rc}).")
-    log_path = acc_dir / "applied.log"
+        if st.button(
+            "Apply LIVE",
+            type="primary",
+            use_container_width=True,
+            disabled=apply_disabled or not confirm_live,
+            key="btn_live",
+        ):
+            with st.status(f"Applying on {account}...", expanded=True) as status:
+                rc, _ = run_subcommand("apply", [account], st.empty())
+                if rc == 0:
+                    status.update(label="Apply done.", state="complete")
+                else:
+                    status.update(label=f"Failed (exit {rc}).", state="error")
+
     if log_path.exists():
         st.subheader("Audit log")
         st.code(log_path.read_text(), language="text")
-    else:
-        st.info("No apply has been run yet.")
 
     st.markdown("---")
-    st.subheader("Export Gmail filter XML")
+    st.subheader("Generate Gmail filter XML")
     st.markdown(
-        "Generate `filters.xml` from your finalized lists. Import once per account "
-        "(Gmail Settings -> See all settings -> Filters and Blocked Addresses -> "
-        "Import filters -> check 'Apply new filters to existing email'). "
+        "Export `filters.xml` from your finalized lists. Import once per account "
+        "(Gmail Settings → See all settings → Filters and Blocked Addresses → "
+        "Import filters → check 'Apply new filters to existing email'). "
         "After that, NEW incoming mail auto-routes by sender, no LLM calls."
     )
-    if st.button("Generate filters.xml"):
-        rc, _ = run_subcommand("export-filters", [account], st.empty())
-        if rc != 0:
-            st.error(f"Export failed (exit {rc}).")
-    xml_path = acc_dir / "filters.xml"
+    if st.button(
+        "Generate filters.xml",
+        use_container_width=True,
+        disabled=apply_disabled,
+        key="btn_filters",
+    ):
+        with st.status("Generating XML...", expanded=False) as status:
+            rc, _ = run_subcommand("export-filters", [account], st.empty())
+            if rc == 0:
+                status.update(label="Generated.", state="complete")
+            else:
+                status.update(label=f"Failed (exit {rc}).", state="error")
     if xml_path.exists():
         st.download_button(
             "Download filters.xml",
             xml_path.read_bytes(),
             file_name=f"{account.replace('@', '-at-')}-filters.xml",
             mime="application/xml",
+            use_container_width=True,
         )
