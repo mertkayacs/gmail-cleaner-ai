@@ -424,7 +424,7 @@ with st.container(border=True):
     with st.expander("advanced (batch sizes)"):
         adv1, adv2, adv3 = st.columns(3)
         with adv1:
-            sender_batch_size = st.number_input("sender batch size", min_value=10, max_value=500, value=50, step=10)
+            sender_batch_size = st.number_input("sender batch size", min_value=1, max_value=500, value=50, step=10)
         with adv2:
             top_sender_cap = st.number_input("top sender cap", min_value=10, max_value=2000, value=200, step=50)
         with adv3:
