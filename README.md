@@ -65,7 +65,7 @@ Sender-centric: a typical inbox has a few hundred unique senders covering 90%+ o
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-username>/gmail-triage
+git clone https://github.com/mertkayacs/gmail-triage
 cd gmail-triage
 bash install.sh                    # checks deps, copies .env.example, installs requirements
 # edit .env: pick LLM_PROVIDER, add the matching API key, add Gmail accounts
