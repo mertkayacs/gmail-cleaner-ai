@@ -245,6 +245,22 @@ ALL_KEY_VARS = [
 ]
 keys_count = sum(1 for v in ALL_KEY_VARS if os.environ.get(v))
 
+# Smart-default preset + early state computation. Lifted above Setup card body
+# so layout state (State A vs B per shape brief) and the gate at the bottom
+# can both decide before any block renders. Without an LLM, scan-only is
+# meaningless; the gate stops the lower cards until both pieces are ready.
+PRESET_KEYS_LIST = list(PRESETS.keys())
+_default_preset_idx = 0
+for _i, _name in enumerate(PRESET_KEYS_LIST):
+    _kv = PRESETS[_name].get("key_var")
+    if _kv and os.environ.get(_kv):
+        _default_preset_idx = _i
+        break
+current_preset_name = st.session_state.get("preset_picker") or PRESET_KEYS_LIST[_default_preset_idx]
+current_preset = PRESETS.get(current_preset_name, PRESETS[PRESET_KEYS_LIST[_default_preset_idx]])
+_current_key_var = current_preset.get("key_var")
+selected_key_set = (_current_key_var is None) or bool(os.environ.get(_current_key_var))
+
 # Status sentence reflects the SELECTED preset's key (computed below in Setup),
 # not a global tally. Set later, render at top via a placeholder.
 status_placeholder_top = st.empty()
@@ -254,11 +270,21 @@ status_placeholder_top = st.empty()
 
 with st.container(border=True):
     st.subheader("Setup")
-    setup_col_acc, setup_col_llm = st.columns(2)
+
+    # State A (vertical stack, lead-in captions per missing piece): anything missing.
+    # State B (2-column compact recap): both Gmail and LLM ready. Per shape brief 2026-05-08.
+    use_columns = bool(accounts_full) and selected_key_set
+    if use_columns:
+        setup_col_acc, setup_col_llm = st.columns(2)
+    else:
+        setup_col_acc = st.container()
+        setup_col_llm = st.container()
 
     # ---- Gmail accounts ----
     with setup_col_acc:
-        st.markdown("**Gmail accounts**")
+        if not accounts_full and not use_columns:
+            st.caption("start by adding a gmail account.")
+        st.markdown("**gmail accounts**")
 
         if accounts_full:
             for slot, email in accounts_full:
@@ -303,20 +329,15 @@ with st.container(border=True):
 
     # ---- LLM provider ----
     with setup_col_llm:
-        st.markdown("**LLM provider**")
-        # Smart default: preselect first preset whose key var is already set.
-        preset_keys_list = list(PRESETS.keys())
-        default_idx = 0
-        for i, name in enumerate(preset_keys_list):
-            kv = PRESETS[name].get("key_var")
-            if kv and os.environ.get(kv):
-                default_idx = i
-                break
+        if not selected_key_set and not use_columns:
+            st.caption("and an llm key to classify.")
+        st.markdown("**llm provider**")
         preset_name = st.selectbox(
             "Provider",
-            preset_keys_list,
-            index=default_idx,
+            PRESET_KEYS_LIST,
+            index=_default_preset_idx,
             label_visibility="collapsed",
+            key="preset_picker",
         )
         preset = PRESETS[preset_name]
 
@@ -387,7 +408,8 @@ with st.container(border=True):
 
 
 # Status reflects what's needed for the SELECTED preset, not a global tally.
-selected_key_set = (key_var is None) or bool(os.environ.get(key_var))  # ollama has no key_var
+# selected_key_set already computed before Setup card body so layout state and
+# this status block share the same source of truth.
 if accounts and selected_key_set:
     top_status = f"{len(accounts)} account{'s' if len(accounts) != 1 else ''}, {preset_name} ready."
 elif accounts and key_var:
@@ -412,9 +434,10 @@ except NameError:
     pass
 
 
-# ============== Gating: must have at least one account before continuing ==============
+# ============== Gating: BOTH a Gmail account AND an LLM key must be ready ==============
+# Without an LLM, scan-only would produce data the user can't classify or act on.
 
-if not accounts:
+if not (accounts and selected_key_set):
     st.stop()
 
 
