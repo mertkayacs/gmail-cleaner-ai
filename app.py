@@ -124,23 +124,42 @@ def file_age(path):
 
 
 def parse_list_file(path):
+    """Read a sender list file, split the sublabel into category + tag columns.
+
+    File format on disk stays 'sender | sublabel | reasoning' for backward
+    compat with existing allowed.txt / disallowed.txt files. The sublabel
+    is conventionally 'Category/Tag' (e.g., 'Newsletter/TechDigest'), so
+    we split on the first slash. Files that pre-date this convention will
+    have an empty tag, which is fine.
+    """
     if not path.exists():
-        return pd.DataFrame(columns=["sender", "sublabel", "reasoning"])
+        return pd.DataFrame(columns=["sender", "category", "tag", "reasoning"])
     rows = []
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         parts = [p.strip() for p in line.split("|")]
+        sender = parts[0] if parts else ""
+        sublabel = parts[1] if len(parts) > 1 else ""
+        reasoning = parts[2] if len(parts) > 2 else ""
+        if "/" in sublabel:
+            cat, tag = sublabel.split("/", 1)
+        else:
+            cat, tag = sublabel, ""
         rows.append({
-            "sender": parts[0] if parts else "",
-            "sublabel": parts[1] if len(parts) > 1 else "",
-            "reasoning": parts[2] if len(parts) > 2 else "",
+            "sender": sender,
+            "category": cat.strip(),
+            "tag": tag.strip(),
+            "reasoning": reasoning,
         })
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["sender", "category", "tag", "reasoning"])
 
 
 def write_list_file(path, header, df):
+    """Recombine category + tag back into the on-disk 'Category/Tag' sublabel
+    so existing tooling (triage.py apply step, filters export) keeps working
+    with the same file format."""
     lines = [
         f"# {header}",
         "# Format: sender@domain | sublabel | reasoning",
@@ -151,7 +170,12 @@ def write_list_file(path, header, df):
         sender = str(row.get("sender", "")).strip()
         if not sender:
             continue
-        sublabel = str(row.get("sublabel", "")).strip()
+        cat = str(row.get("category", "")).strip()
+        tag = str(row.get("tag", "")).strip()
+        if cat and tag:
+            sublabel = f"{cat}/{tag}"
+        else:
+            sublabel = cat or tag
         reasoning = str(row.get("reasoning", "")).strip()
         lines.append(f"{sender} | {sublabel} | {reasoning}")
     path.write_text("\n".join(lines) + "\n")
@@ -690,23 +714,53 @@ with st.container(border=True):
         df_a = parse_list_file(allowed_path)
         df_d = parse_list_file(disallowed_path)
 
+        # Filter dropdowns. When a specific category is picked, the editor
+        # below renders read-only — saving while filtered would silently drop
+        # the rows hidden by the filter, so we forbid edits in filtered view
+        # and the user has to switch back to '(all)' to mutate.
+        def _category_options(df):
+            cats = sorted(c for c in df["category"].unique() if c)
+            return ["(all)"] + cats
+
         rev_col_a, rev_col_d = st.columns(2)
         with rev_col_a:
             st.markdown(f"**allowed (keep), {len(df_a)} senders**")
-            edited_a = st.data_editor(
-                df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+            filter_a = st.selectbox(
+                "filter category", _category_options(df_a), key="filter_allowed",
+                label_visibility="collapsed",
             )
-            if st.button("Save allowed", key="btn_save_a"):
-                write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
-                st.success("Saved.")
+            if filter_a != "(all)":
+                view_a = df_a[df_a["category"] == filter_a]
+                st.caption(f"showing `{filter_a}` only ({len(view_a)} of {len(df_a)}). Read-only — switch to (all) to edit.")
+                st.data_editor(
+                    view_a, use_container_width=True, key="ed_allowed_view", disabled=True,
+                )
+            else:
+                edited_a = st.data_editor(
+                    df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+                )
+                if st.button("Save allowed", key="btn_save_a"):
+                    write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
+                    st.success("Saved.")
         with rev_col_d:
             st.markdown(f"**disallowed (trash), {len(df_d)} senders**")
-            edited_d = st.data_editor(
-                df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+            filter_d = st.selectbox(
+                "filter category", _category_options(df_d), key="filter_disallowed",
+                label_visibility="collapsed",
             )
-            if st.button("Save disallowed", key="btn_save_d"):
-                write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
-                st.success("Saved.")
+            if filter_d != "(all)":
+                view_d = df_d[df_d["category"] == filter_d]
+                st.caption(f"showing `{filter_d}` only ({len(view_d)} of {len(df_d)}). Read-only — switch to (all) to edit.")
+                st.data_editor(
+                    view_d, use_container_width=True, key="ed_disallowed_view", disabled=True,
+                )
+            else:
+                edited_d = st.data_editor(
+                    df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+                )
+                if st.button("Save disallowed", key="btn_save_d"):
+                    write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
+                    st.success("Saved.")
 
 
 # ============== Card 4: Apply ==============
