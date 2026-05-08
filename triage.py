@@ -326,6 +326,69 @@ def parse_list_file(path):
     return out
 
 
+def build_filter_xml(assignments, account_email):
+    """Build a Gmail filter export XML from per-sender classifications."""
+    from xml.sax.saxutils import escape
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = int(datetime.now(timezone.utc).timestamp())
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<feed xmlns="http://www.w3.org/2005/Atom" xmlns:apps="http://schemas.google.com/apps/2006">',
+        f'  <title>Mail Filters from gmail-cleaner-ai for {escape(account_email)}</title>',
+        f'  <id>tag:mail.google.com,2008:filters:{ts}</id>',
+        f'  <updated>{now_iso}</updated>',
+        '  <author><name>gmail-cleaner-ai</name></author>',
+    ]
+
+    for i, (sender, info) in enumerate(sorted(assignments.items())):
+        sublabel = info.get("sublabel", "")
+        category = info.get("category", "keep_other")
+        if not sublabel:
+            continue
+        is_junk = category.startswith("junk_")
+        properties = [
+            f'    <apps:property name="from" value="{escape(sender)}"/>',
+            f'    <apps:property name="label" value="{escape(sublabel)}"/>',
+        ]
+        if is_junk:
+            properties.append('    <apps:property name="shouldArchive" value="true"/>')
+        parts.extend([
+            '  <entry>',
+            '    <category term="filter"></category>',
+            '    <title>Mail Filter</title>',
+            f'    <id>tag:mail.google.com,2008:filter:{ts}-{i}</id>',
+            f'    <updated>{now_iso}</updated>',
+            '    <content></content>',
+            *properties,
+            '  </entry>',
+        ])
+
+    parts.append('</feed>')
+    return "\n".join(parts) + "\n"
+
+
+def cmd_export_filters(account_email):
+    """Emit Gmail filter XML from the proposed_categories.json file."""
+    out_dir = DATA_DIR / account_email
+    cats_path = out_dir / "proposed_categories.json"
+    if not cats_path.exists():
+        raise SystemExit(f"No analysis at {cats_path}. Run `analyze` first.")
+    cats = json.loads(cats_path.read_text())
+    assignments = cats.get("sender_assignments", {})
+    if not assignments:
+        raise SystemExit("No sender assignments to export.")
+    xml = build_filter_xml(assignments, account_email)
+    out_path = out_dir / "filters.xml"
+    out_path.write_text(xml)
+    junk_count = sum(1 for a in assignments.values()
+                     if a.get("category", "").startswith("junk_"))
+    print(f"Wrote {out_path}")
+    print(f"  {len(assignments)} filters total, {junk_count} junk (skip-inbox)")
+    print("\nImport in Gmail: Settings -> See all settings -> Filters and Blocked Addresses ->")
+    print("Import filters -> select this file -> check 'Apply new filters to existing email'.")
+
+
 def cmd_apply(account_email, dry_run):
     out_dir = DATA_DIR / account_email
     allowed = parse_list_file(out_dir / "allowed.txt")
@@ -421,6 +484,9 @@ def main():
     p_ap.add_argument("account", help="Gmail account email")
     p_ap.add_argument("--dry-run", action="store_true", help="Show actions, do not modify")
 
+    p_ex = sub.add_parser("export-filters", help="Emit Gmail filter XML for one-time import")
+    p_ex.add_argument("account", help="Gmail account email")
+
     args = parser.parse_args()
     if args.cmd == "inventory":
         cmd_inventory(args.account)
@@ -428,6 +494,8 @@ def main():
         cmd_analyze(args.account)
     elif args.cmd == "apply":
         cmd_apply(args.account, dry_run=args.dry_run)
+    elif args.cmd == "export-filters":
+        cmd_export_filters(args.account)
 
 
 if __name__ == "__main__":

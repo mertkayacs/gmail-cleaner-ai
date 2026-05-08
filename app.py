@@ -226,3 +226,24 @@ with tab_apply:
         st.code(log_path.read_text(), language="text")
     else:
         st.info("No apply has been run yet.")
+
+    st.markdown("---")
+    st.subheader("Export Gmail filter XML")
+    st.markdown(
+        "Generate `filters.xml` from your finalized lists. Import once per account "
+        "(Gmail Settings -> See all settings -> Filters and Blocked Addresses -> "
+        "Import filters -> check 'Apply new filters to existing email'). "
+        "After that, NEW incoming mail auto-routes by sender, no LLM calls."
+    )
+    if st.button("Generate filters.xml"):
+        rc, _ = run_subcommand("export-filters", [account], st.empty())
+        if rc != 0:
+            st.error(f"Export failed (exit {rc}).")
+    xml_path = acc_dir / "filters.xml"
+    if xml_path.exists():
+        st.download_button(
+            "Download filters.xml",
+            xml_path.read_bytes(),
+            file_name=f"{account.replace('@', '-at-')}-filters.xml",
+            mime="application/xml",
+        )

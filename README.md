@@ -13,6 +13,7 @@ You have several Gmail accounts. Each holds thousands of mails. Most of it is ma
 - Sends top senders to your chosen LLM for classification. Sender plus 3 sample subjects, no body.
 - Outputs editable allowed and disallowed lists per account.
 - Applies labels and moves disallowed mail to Trash via IMAP. Gmail auto-purges after 30 days.
+- Exports a Gmail filter XML you import once per account so future mail auto-routes without further LLM calls.
 
 ## What it looks like
 
