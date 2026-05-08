@@ -152,6 +152,17 @@ def write_list_file(path, header, df):
     path.write_text("\n".join(lines) + "\n")
 
 
+def section_heading(text: str):
+    """Lowercase monospace H2 used for each card. Matches the brand voice
+    declared in PRODUCT.md (lowercase, monospace) which Streamlit's default
+    st.subheader cannot deliver."""
+    st.markdown(
+        f"<h2 style='font-family: monospace; font-weight: 600; "
+        f"font-size: 1.2rem; margin: 0 0 12px 0;'>{text.lower()}</h2>",
+        unsafe_allow_html=True,
+    )
+
+
 PRESETS = {
     "Anthropic (Claude)": {
         "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
@@ -269,7 +280,7 @@ status_placeholder_top = st.empty()
 # ============== Card 1: Setup ==============
 
 with st.container(border=True):
-    st.subheader("Setup")
+    section_heading("setup")
 
     # State A (vertical stack, lead-in captions per missing piece): anything missing.
     # State B (2-column compact recap): both Gmail and LLM ready. Per shape brief 2026-05-08.
@@ -470,10 +481,10 @@ xml_path = acc_dir / "filters.xml"
 # ============== Card 2: Run (Inventory + Classify) ==============
 
 with st.container(border=True):
-    st.subheader("Scan and classify")
+    section_heading("scan and classify")
 
     # ---- Scan inbox (inventory) ----
-    st.markdown("**Scan inbox.** IMAP-only. Reads sender, subject, headers. Body stays in Gmail.")
+    st.markdown("**scan inbox.** IMAP-only. Reads sender, subject, headers. Body stays in Gmail.")
     if st.button("Scan inbox", type="primary", use_container_width=True, key="btn_inv"):
         with st.status(
             f"Scanning {account} (a few minutes for big mailboxes)...",
@@ -499,7 +510,7 @@ with st.container(border=True):
 
     # ---- Classify (analyze) ----
     classify_disabled = not inv_path.exists()
-    st.markdown(f"**Classify.** Top senders sent to `{model or 'default model'}`. Sender plus three sample subjects, no body.")
+    st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`. Sender plus three sample subjects, no body.")
     if st.button(
         "Classify",
         type="primary",
@@ -533,13 +544,13 @@ with st.container(border=True):
 # ============== Card 3: Review ==============
 
 with st.container(border=True):
-    st.subheader("Review")
+    section_heading("review")
     review_ready = allowed_path.exists() or disallowed_path.exists()
     if not review_ready:
-        st.caption("Run Classify first. Tables below populate from the model's output.")
+        st.caption("Run classify first. Tables below populate from the model's output.")
     st.markdown(
-        "Edit each table and **Save**. Move a sender between Allowed and Disallowed by editing it. "
-        "The Apply step reads these files."
+        "Edit each table and click its save button. Move a sender between allowed and "
+        "disallowed by editing the row. The apply step reads these files."
     )
 
     df_a = parse_list_file(allowed_path)
@@ -547,7 +558,7 @@ with st.container(border=True):
 
     rev_col_a, rev_col_d = st.columns(2)
     with rev_col_a:
-        st.markdown(f"**Allowed (keep), {len(df_a)} senders**")
+        st.markdown(f"**allowed (keep), {len(df_a)} senders**")
         edited_a = st.data_editor(
             df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
         )
@@ -555,7 +566,7 @@ with st.container(border=True):
             write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
             st.success("Saved.")
     with rev_col_d:
-        st.markdown(f"**Disallowed (Trash), {len(df_d)} senders**")
+        st.markdown(f"**disallowed (trash), {len(df_d)} senders**")
         edited_d = st.data_editor(
             df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
         )
@@ -567,7 +578,7 @@ with st.container(border=True):
 # ============== Card 4: Apply ==============
 
 with st.container(border=True):
-    st.subheader("Apply")
+    section_heading("apply")
     apply_disabled = not (allowed_path.exists() or disallowed_path.exists())
     if apply_disabled:
         st.caption("Save reviewed lists first.")
