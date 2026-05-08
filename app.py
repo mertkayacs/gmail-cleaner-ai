@@ -391,7 +391,7 @@ with tab_inv:
 
 with tab_an:
     if run_an:
-        st.info(f"Running analyze on {account} (provider={provider})...")
+        st.info(f"Running analyze on {account} (model={model or 'default'})...")
         rc, _ = run_subcommand("analyze", [account], st.empty())
         if rc == 0:
             st.success("Analyze done. Review the Lists tab.")
