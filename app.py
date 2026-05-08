@@ -465,11 +465,12 @@ with st.container(border=True):
     if inv_path.exists():
         inv = json.loads(inv_path.read_text())
         st.caption(f"Last scanned {file_age(inv_path)}.")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total", f"{inv['total_mails']:,}")
-        c2.metric("Senders", f"{inv['unique_senders']:,}")
-        c3.metric("Domains", f"{inv['unique_domains']:,}")
-        c4.metric("Unsubscribable", f"{inv['has_list_unsubscribe']:,}")
+        st.markdown(
+            f"`{inv['total_mails']:,}` mails  ·  "
+            f"`{inv['unique_senders']:,}` senders  ·  "
+            f"`{inv['unique_domains']:,}` domains  ·  "
+            f"`{inv['has_list_unsubscribe']:,}` unsubscribable"
+        )
 
     st.markdown("")
 
