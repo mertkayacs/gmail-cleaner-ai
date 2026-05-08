@@ -494,6 +494,7 @@ with st.container(border=True):
         st.caption("Run the scan first.")
     if cats_path.exists():
         cats = json.loads(cats_path.read_text())
+        st.caption(f"Last classified {file_age(cats_path)}.")
         cat_summary = [
             {"category": c, "senders": len(s)}
             for c, s in cats.get("categories", {}).items()
