@@ -234,12 +234,16 @@ Two things to set up. Both go in a `.env` file in the project root.
 - Generate one named "gmail-cleaner-ai" and copy the 16-character password
 - Add to `.env` as `GMAIL_ACCOUNT_n` and `GMAIL_APPPASS_n` (n=1, 2, 3...)
 
-**2. LLM API key** (pick any one)
-- **Anthropic** (Claude): [console.anthropic.com](https://console.anthropic.com), set `ANTHROPIC_API_KEY`
-- **OpenAI** (GPT): [platform.openai.com](https://platform.openai.com), set `OPENAI_API_KEY`
-- **Gemini** (Google): [aistudio.google.com/apikey](https://aistudio.google.com/apikey), set `GOOGLE_API_KEY`
-- **Ollama** (open-source models, local): install from [ollama.com](https://ollama.com), no key
-- **Any OpenAI-compatible API** (OpenRouter, Together AI, Groq, Mistral, vLLM, LM Studio, llama.cpp): set `LLM_PROVIDER=openai` plus `LLM_BASE_URL=<endpoint>` and put that provider's key in `OPENAI_API_KEY`
+**2. LLM API key** (pick any one provider, set its key in `.env`)
+- **Anthropic** (Claude): [console.anthropic.com](https://console.anthropic.com) — `ANTHROPIC_API_KEY`
+- **OpenAI** (GPT): [platform.openai.com](https://platform.openai.com) — `OPENAI_API_KEY`
+- **Gemini** (Google): [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — `GEMINI_API_KEY`
+- **Groq** (fast OSS): [console.groq.com](https://console.groq.com/keys) — `GROQ_API_KEY`
+- **Together AI**: [together.xyz](https://api.together.xyz/settings/api-keys) — `TOGETHERAI_API_KEY`
+- **OpenRouter**: [openrouter.ai](https://openrouter.ai/keys) — `OPENROUTER_API_KEY`
+- **Mistral**: [console.mistral.ai](https://console.mistral.ai/api-keys) — `MISTRAL_API_KEY`
+- **Ollama** (local, no key): [ollama.com](https://ollama.com)
+- **Anything else**: see [LiteLLM provider docs](https://docs.litellm.ai/docs/providers)
 
 After saving `.env`, refresh this page.
         """
@@ -286,9 +290,11 @@ if preset_name == "Custom OpenAI-compatible":
 elif base_url:
     st.sidebar.caption(f"Base URL: `{base_url}`")
 
+is_ollama = preset_name.startswith("Ollama")
+
 # Ollama host
 ollama_host = ""
-if preset["provider"] == "ollama":
+if is_ollama:
     ollama_host = st.sidebar.text_input(
         "Ollama host",
         os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
@@ -305,7 +311,7 @@ if key_var:
         if url:
             msg += f" — get one at [{url}]({url})"
         st.sidebar.caption(msg)
-elif preset["provider"] == "ollama":
+elif is_ollama:
     url = preset.get("key_url")
     note = "Ollama runs locally, no API key needed"
     if url:
