@@ -91,6 +91,7 @@ def run_subcommand(cmd, args, status_placeholder):
     passthrough = [
         "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
+        "CLASSIFY_MODE",
     ]
     for key in passthrough:
         if key in st.session_state and st.session_state[key]:
@@ -554,7 +555,28 @@ with st.container(border=True):
 
     # ---- Classify (analyze) ----
     classify_disabled = not inv_path.exists()
-    st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`. Sender plus three sample subjects, no body.")
+    st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`.")
+
+    # Mode selector. Determines what evidence per sender goes to the LLM.
+    # Phase 3 will add a third option (sender + subject + first N body lines).
+    _mode_labels = {
+        "sender_subject": "sender + sample subjects (default, balanced)",
+        "sender_only": "sender only (most private, lowest cost, less accurate)",
+    }
+    _mode_keys = list(_mode_labels.keys())
+    _default_mode_idx = _mode_keys.index(
+        st.session_state.get("CLASSIFY_MODE", "sender_subject")
+        if st.session_state.get("CLASSIFY_MODE") in _mode_keys
+        else "sender_subject"
+    )
+    classify_mode = st.radio(
+        "what to send to the LLM",
+        _mode_keys,
+        index=_default_mode_idx,
+        format_func=lambda k: _mode_labels[k],
+        key="CLASSIFY_MODE",
+        horizontal=False,
+    )
 
     # Preview pane: shows batch math + the actual prompt that will be sent.
     # Only rendered after scan, since the math depends on the inventory.
@@ -570,7 +592,9 @@ with st.container(border=True):
             _sample_pairs = inv.get("top_senders", [])[:2]
             _sample_subj = inv.get("sample_subjects", {})
             if _sample_pairs:
-                _sample_prompt = build_classification_prompt(_sample_pairs, _sample_subj)
+                _sample_prompt = build_classification_prompt(
+                    _sample_pairs, _sample_subj, mode=classify_mode
+                )
                 st.code(_sample_prompt, language="text")
             else:
                 st.caption("No senders in inventory to preview yet.")

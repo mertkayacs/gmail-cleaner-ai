@@ -40,6 +40,7 @@ DATA_DIR = Path(__file__).parent / "data"
 SENDER_BATCH_SIZE = int(os.environ.get("SENDER_BATCH_SIZE", "50"))    # senders per classification call
 TOP_SENDER_CAP = int(os.environ.get("TOP_SENDER_CAP", "200"))         # only classify top N senders by volume
 FETCH_BATCH_SIZE = int(os.environ.get("FETCH_BATCH_SIZE", "500"))     # IMAP fetch chunk size
+CLASSIFY_MODE = os.environ.get("CLASSIFY_MODE", "sender_subject")     # sender_only | sender_subject | sender_subject_body
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
 TRASH_FOLDER = '"[Gmail]/Trash"'
 
@@ -209,14 +210,34 @@ def cmd_inventory(account_email):
 
 # -------------------- Analyze -------------------------------------------------
 
-def build_classification_prompt(batch_pairs, samples):
+def build_classification_prompt(batch_pairs, samples, mode="sender_subject"):
+    """Build the classification prompt for one batch.
+
+    mode controls how much evidence per sender goes to the LLM:
+      - sender_only: just sender email + mail count
+      - sender_subject: sender + count + 3 sample subjects (default)
+      - sender_subject_body: sender + count + 3 sample subjects + body excerpts
+        (excerpts must already exist in samples under the 'body' key per sender;
+        body fetch happens in the inventory step.)
+    """
     items = []
     for sender, count in batch_pairs:
-        items.append({
-            "sender": sender,
-            "count": count,
-            "sample_subjects": samples.get(sender, [])[:3],
-        })
+        item = {"sender": sender, "count": count}
+        if mode in ("sender_subject", "sender_subject_body"):
+            item["sample_subjects"] = samples.get(sender, [])[:3]
+        if mode == "sender_subject_body":
+            body = samples.get(sender + "::body", [])
+            if body:
+                item["body_excerpts"] = body[:3]
+        items.append(item)
+
+    if mode == "sender_only":
+        evidence_line = "Senders to classify (with mail count only, no subjects):"
+    elif mode == "sender_subject_body":
+        evidence_line = "Senders to classify (with mail count, sample subjects, and body excerpts):"
+    else:
+        evidence_line = "Senders to classify (with mail count and sample subjects):"
+
     return textwrap.dedent("""\
         You are classifying email senders for a personal Gmail organization system.
 
@@ -238,8 +259,7 @@ def build_classification_prompt(batch_pairs, samples):
         Output strictly as a JSON object with sender as key. Example:
         {"foo@bar.com": {"category": "keep_work", "sublabel": "Work/Acme", "confidence": 85, "reasoning": "Recurring sender with personalized subject lines."}}
 
-        Senders to classify (with mail count and sample subjects):
-        """) + json.dumps(items, indent=2) + "\n\nReturn the JSON object only, no surrounding text."
+        """) + evidence_line + "\n" + json.dumps(items, indent=2) + "\n\nReturn the JSON object only, no surrounding text."
 
 
 def cmd_analyze(account_email):
@@ -260,11 +280,12 @@ def cmd_analyze(account_email):
 
     all_classifications = {}
     n_batches = (len(top_senders) + SENDER_BATCH_SIZE - 1) // SENDER_BATCH_SIZE
+    print(f"Mode: {CLASSIFY_MODE}")
     for i in range(0, len(top_senders), SENDER_BATCH_SIZE):
         batch = top_senders[i:i + SENDER_BATCH_SIZE]
         print(f"Classifying batch {i // SENDER_BATCH_SIZE + 1}/{n_batches} "
               f"({len(batch)} senders)...")
-        prompt = build_classification_prompt(batch, samples)
+        prompt = build_classification_prompt(batch, samples, mode=CLASSIFY_MODE)
         try:
             classifications = classifier.classify_batch(prompt)
         except Exception as e:
