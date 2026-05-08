@@ -3,8 +3,8 @@ Streamlit UI for gmail-cleaner-ai.
 
 Run: streamlit run app.py
 
-Single-page vertical card flow. No sidebar, no tabs. Mobile-first. Settings
-forms write to .env so users never touch a terminal.
+Single-page vertical card flow. No sidebar, no tabs. Settings forms write
+to .env so users never touch a terminal.
 """
 
 import json
@@ -230,11 +230,11 @@ PRESETS = {
 
 # ============== Page header ==============
 
-st.set_page_config(page_title="gmail-cleaner-ai", page_icon=":mailbox:", layout="wide")
+st.set_page_config(page_title="gmail cleaner ai", page_icon=":mailbox:", layout="wide")
 
 st.markdown(
     "<h1 style='font-family: monospace; font-weight: 600; margin-bottom: 0;'>"
-    "gmail-cleaner-ai"
+    "gmail cleaner ai"
     "</h1>",
     unsafe_allow_html=True,
 )
@@ -309,7 +309,7 @@ with st.container(border=True):
         # When accounts exist, hide the add form behind an expander so it doesn't
         # dominate the column. New users (no accounts) see the form immediately.
         add_form_container = (
-            st.expander("Add another account") if accounts_full else st.container()
+            st.expander("add another account") if accounts_full else st.container()
         )
         with add_form_container:
             with st.form("add_acc_form", clear_on_submit=True, border=False):
@@ -354,7 +354,7 @@ with st.container(border=True):
         preset = PRESETS[preset_name]
 
         if preset["models"]:
-            selected_model = st.selectbox("Model", preset["models"])
+            selected_model = st.selectbox("model", preset["models"])
         else:
             selected_model = ""
         custom_model = st.text_input(
@@ -373,7 +373,7 @@ with st.container(border=True):
         is_ollama = preset_name.startswith("Ollama")
         ollama_host = ""
         if is_ollama:
-            ollama_host = st.text_input("Ollama host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
+            ollama_host = st.text_input("ollama host", os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
 
         # LM Studio and llama.cpp use OPENAI_API_KEY by LiteLLM convention. The
         # key field below shows that var name, which can read as "is this
@@ -421,12 +421,12 @@ with st.container(border=True):
             st.caption(note)
 
     # Advanced (small expander, full-width within the card)
-    with st.expander("Advanced (batch sizes)"):
+    with st.expander("advanced (batch sizes)"):
         adv1, adv2, adv3 = st.columns(3)
         with adv1:
-            sender_batch_size = st.number_input("Sender batch size", min_value=1, max_value=500, value=50, step=10)
+            sender_batch_size = st.number_input("sender batch size", min_value=10, max_value=500, value=50, step=10)
         with adv2:
-            top_sender_cap = st.number_input("Top sender cap", min_value=10, max_value=2000, value=200, step=50)
+            top_sender_cap = st.number_input("top sender cap", min_value=10, max_value=2000, value=200, step=50)
         with adv3:
             fetch_batch_size = st.number_input("IMAP fetch batch size", min_value=50, max_value=2000, value=500, step=50)
 
@@ -577,7 +577,7 @@ with st.container(border=True):
         or xml_path.exists()
     )
     if _data_exists:
-        with st.expander("Reset data for this account"):
+        with st.expander("reset data for this account"):
             st.caption(
                 f"Deletes inventory, classification, allowed/disallowed lists, and "
                 f"filters.xml for `{account}`. The audit log (applied.log) is preserved."
@@ -685,7 +685,7 @@ with st.container(border=True):
 
     if log_path.exists():
         st.caption(f"Last applied {file_age(log_path)}.")
-        with st.expander("Audit log"):
+        with st.expander("audit log"):
             st.code(log_path.read_text(), language="text")
 
     st.markdown(
