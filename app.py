@@ -241,8 +241,9 @@ st.markdown(
 st.markdown(
     "<p style='color: #6b6357; margin-top: 4px;'>"
     "Sender-level Gmail cleanup. IMAP read, LLM classify, label, trash. "
-    "BYOK, MIT, "
-    "<a href='https://github.com/mertkayacs/gmail-cleaner-ai' style='color: #9b4d00;'>github</a>."
+    "BYOK, MIT. "
+    "<a href='https://github.com/mertkayacs/gmail-cleaner-ai' style='color: #9b4d00;'>"
+    "github.com/mertkayacs/gmail-cleaner-ai</a>"
     "</p>",
     unsafe_allow_html=True,
 )
@@ -602,9 +603,9 @@ with st.container(border=True):
     section_heading("review")
     review_ready = allowed_path.exists() or disallowed_path.exists()
     if not review_ready:
-        st.caption(
-            "No senders to review yet. Run classify above and the model's output "
-            "will split into two editable lists here: allowed (keep, get sublabels) "
+        st.markdown(
+            "**No senders yet.** Run classify above and the model's output will "
+            "split into two editable lists here: allowed (keep, get sublabels) "
             "and disallowed (move to Trash)."
         )
     else:
@@ -622,7 +623,7 @@ with st.container(border=True):
             edited_a = st.data_editor(
                 df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
             )
-            if st.button("Save allowed", use_container_width=True, key="btn_save_a"):
+            if st.button("Save allowed", key="btn_save_a"):
                 write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
                 st.success("Saved.")
         with rev_col_d:
@@ -630,7 +631,7 @@ with st.container(border=True):
             edited_d = st.data_editor(
                 df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
             )
-            if st.button("Save disallowed", use_container_width=True, key="btn_save_d"):
+            if st.button("Save disallowed", key="btn_save_d"):
                 write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
                 st.success("Saved.")
 
@@ -687,9 +688,8 @@ with st.container(border=True):
         with st.expander("Audit log"):
             st.code(log_path.read_text(), language="text")
 
-    st.markdown("---")
     st.markdown(
-        "**Generate Gmail filter XML.** Import once per account in Gmail Settings → Filters → Import filters. "
+        "**generate gmail filter xml.** Import once per account in Gmail Settings → Filters → Import filters. "
         "Future mail auto-routes by sender, no LLM calls."
     )
     if st.button(
