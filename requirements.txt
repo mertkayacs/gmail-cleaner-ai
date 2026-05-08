@@ -1,9 +1,7 @@
 python-dotenv>=1.0.0
 streamlit>=1.30.0
+pandas>=2.0.0
 
-# Provider SDKs. Install only the ones you actually use.
-# (All four are listed so `pip install -r requirements.txt` covers any LLM_PROVIDER.)
-anthropic>=0.30.0
-openai>=1.50.0
-google-generativeai>=0.8.0
-requests>=2.31.0
+# LiteLLM speaks 100+ provider APIs through one unified call.
+# No need to install per-provider SDKs.
+litellm>=1.50.0
