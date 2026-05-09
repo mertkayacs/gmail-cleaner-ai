@@ -355,6 +355,19 @@ def cmd_analyze(account_email):
     for _sender, _bodies in inventory.get("sample_bodies", {}).items():
         samples[_sender + "::body"] = _bodies
 
+    # SENDERS env var triggers hybrid re-classify: only the listed senders
+    # get sent to the LLM, results merge into existing proposed_categories
+    # so previously-classified senders survive untouched. Empty value means
+    # full classify (default). Comma-separated emails, lowercased.
+    selected_env = os.environ.get("SENDERS", "").strip()
+    selected_set = set(s.strip().lower() for s in selected_env.split(",") if s.strip())
+    if selected_set:
+        top_senders = [(s, c) for s, c in top_senders if s.lower() in selected_set]
+        print(f"Hybrid re-classify: {len(top_senders)} selected sender(s).")
+        if not top_senders:
+            print("None of the selected senders were found in inventory. Aborting.")
+            return
+
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env")
     from lib.classifier import get_classifier
@@ -376,6 +389,20 @@ def cmd_analyze(account_email):
             print(f"  Classifier error: {e}")
             continue
         all_classifications.update(classifications)
+
+    # Hybrid merge: load existing assignments and overlay new ones so senders
+    # not in this run keep their prior classification.
+    if selected_set:
+        cats_path = out_dir / "proposed_categories.json"
+        if cats_path.exists():
+            try:
+                prior = json.loads(cats_path.read_text()).get("sender_assignments", {})
+                merged = dict(prior)
+                merged.update(all_classifications)
+                all_classifications = merged
+                print(f"Merged with {len(prior)} prior assignments.")
+            except Exception as e:
+                print(f"Could not merge prior assignments: {e}")
 
     by_category = defaultdict(list)
     allowed = []

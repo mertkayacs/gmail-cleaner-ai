@@ -92,6 +92,7 @@ def run_subcommand(cmd, args, status_placeholder):
         "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
         "CLASSIFY_MODE", "BODY_LINES",
+        "SENDERS",
     ]
     for key in passthrough:
         if key in st.session_state and st.session_state[key]:
@@ -722,7 +723,17 @@ with st.container(border=True):
             cats = sorted(c for c in df["category"].unique() if c)
             return ["(all)"] + cats
 
+        # Insert a 'select' boolean column (defaulted False) at the front of
+        # each editor's DataFrame. Users tick rows for hybrid re-classify
+        # below. The column is stripped before write so it never persists.
+        df_a_disp = df_a.copy()
+        df_a_disp.insert(0, "select", False)
+        df_d_disp = df_d.copy()
+        df_d_disp.insert(0, "select", False)
+
         rev_col_a, rev_col_d = st.columns(2)
+        edited_a = None
+        edited_d = None
         with rev_col_a:
             st.markdown(f"**allowed (keep), {len(df_a)} senders**")
             filter_a = st.selectbox(
@@ -737,10 +748,10 @@ with st.container(border=True):
                 )
             else:
                 edited_a = st.data_editor(
-                    df_a, num_rows="dynamic", use_container_width=True, key="ed_allowed"
+                    df_a_disp, num_rows="dynamic", use_container_width=True, key="ed_allowed"
                 )
                 if st.button("Save allowed", key="btn_save_a"):
-                    write_list_file(allowed_path, "Allowed senders (keep)", edited_a)
+                    write_list_file(allowed_path, "Allowed senders (keep)", edited_a.drop(columns=["select"], errors="ignore"))
                     st.success("Saved.")
         with rev_col_d:
             st.markdown(f"**disallowed (trash), {len(df_d)} senders**")
@@ -756,11 +767,52 @@ with st.container(border=True):
                 )
             else:
                 edited_d = st.data_editor(
-                    df_d, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
+                    df_d_disp, num_rows="dynamic", use_container_width=True, key="ed_disallowed"
                 )
                 if st.button("Save disallowed", key="btn_save_d"):
-                    write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d)
+                    write_list_file(disallowed_path, "Disallowed senders (move to Trash)", edited_d.drop(columns=["select"], errors="ignore"))
                     st.success("Saved.")
+
+        # Hybrid re-classify: collect ticks from both tables, send to triage
+        # with SENDERS env var + chosen mode. Results merge into existing
+        # proposed_categories so untouched senders survive.
+        _sel_a = edited_a[edited_a["select"]]["sender"].tolist() if edited_a is not None else []
+        _sel_d = edited_d[edited_d["select"]]["sender"].tolist() if edited_d is not None else []
+        _all_selected = sorted(set(_sel_a + _sel_d))
+        if _all_selected:
+            st.markdown("---")
+            st.markdown(
+                f"**hybrid re-classify.** {len(_all_selected)} sender(s) selected. "
+                "Re-runs classify on just these senders with the chosen mode below; "
+                "untouched senders keep their prior classification."
+            )
+            _hyb_mode_keys = list(_mode_labels.keys())
+            _hyb_default = classify_mode if classify_mode in _hyb_mode_keys else "sender_subject"
+            hybrid_mode = st.radio(
+                "mode for re-classify",
+                _hyb_mode_keys,
+                index=_hyb_mode_keys.index(_hyb_default),
+                format_func=lambda k: _mode_labels[k],
+                key="hybrid_mode",
+                horizontal=False,
+            )
+            if st.button(f"Re-classify {len(_all_selected)} selected", key="btn_hybrid"):
+                # Stash overrides for this one subprocess call. CLASSIFY_MODE may
+                # differ from the main radio; restore after.
+                _prior_mode = st.session_state.get("CLASSIFY_MODE")
+                st.session_state["SENDERS"] = ",".join(_all_selected)
+                st.session_state["CLASSIFY_MODE"] = hybrid_mode
+                with st.status(f"Re-classifying {len(_all_selected)} senders...", expanded=True) as status:
+                    rc, _ = run_subcommand("analyze", [account], st.empty())
+                    status.update(
+                        label="Re-classify done." if rc == 0 else f"Re-classify failed (exit {rc}).",
+                        state="complete" if rc == 0 else "error",
+                        expanded=rc != 0,
+                    )
+                # Reset SENDERS so a regular Classify click later doesn't carry over.
+                st.session_state["SENDERS"] = ""
+                st.session_state["CLASSIFY_MODE"] = _prior_mode or "sender_subject"
+                st.rerun()
 
 
 # ============== Card 4: Apply ==============
