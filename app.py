@@ -93,6 +93,7 @@ def run_subcommand(cmd, args, status_placeholder):
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
         "CLASSIFY_MODE", "BODY_LINES",
         "SENDERS", "CATEGORY_SOURCE",
+        "APPLY_CATEGORIES",
     ]
     for key in passthrough:
         if key in st.session_state and st.session_state[key]:
@@ -875,6 +876,37 @@ with st.container(border=True):
         "Apply your reviewed lists. Allowed senders get sublabels; Disallowed senders' mail moves to Trash. "
         "**Trash is recoverable for 30 days**, then Gmail auto-purges."
     )
+
+    # Scope filter: read all categories from saved allowed + disallowed, render
+    # one checkbox per category. Default all checked. APPLY_CATEGORIES env var
+    # carries the user's selection through to triage's apply step.
+    _apply_cats = set()
+    if not apply_disabled:
+        for _p in (allowed_path, disallowed_path):
+            for _row in parse_list_file(_p).itertuples():
+                if _row.category:
+                    _apply_cats.add(_row.category)
+    if _apply_cats:
+        with st.expander(f"scope: which categories to act on ({len(_apply_cats)} present)", expanded=False):
+            st.caption(
+                "Default: all categories run. Uncheck any to skip them this round. "
+                "Useful for trashing junk first, leaving newsletters for a separate pass."
+            )
+            _selected_cats = []
+            _cat_cols = st.columns(min(3, max(1, len(_apply_cats))))
+            for _i, _cat in enumerate(sorted(_apply_cats)):
+                with _cat_cols[_i % len(_cat_cols)]:
+                    if st.checkbox(_cat, value=True, key=f"apply_cat_{_cat}"):
+                        _selected_cats.append(_cat)
+            # Stash for run_subcommand to pick up. Empty string when all are
+            # selected = no filter (matches triage's 'unset means no filter').
+            if len(_selected_cats) == len(_apply_cats):
+                st.session_state["APPLY_CATEGORIES"] = ""
+            else:
+                st.session_state["APPLY_CATEGORIES"] = ",".join(_selected_cats)
+                st.caption(f"Will act on: {', '.join(_selected_cats) or '(none — apply will be a no-op)'}")
+    else:
+        st.session_state["APPLY_CATEGORIES"] = ""
 
     apply_col_dry, apply_col_live = st.columns(2)
     with apply_col_dry:

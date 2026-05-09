@@ -668,6 +668,19 @@ def cmd_apply(account_email, dry_run):
     if not allowed and not disallowed:
         raise SystemExit("Run `analyze` first or populate allowed.txt and disallowed.txt.")
 
+    # Optional scope filter: APPLY_CATEGORIES env var (comma-separated category
+    # prefixes, e.g. 'Newsletter,Junk'). When set, only senders whose sublabel
+    # category-part matches one of these are acted on. Empty/unset = act on all.
+    scope_env = os.environ.get("APPLY_CATEGORIES", "").strip()
+    scope = set(c.strip() for c in scope_env.split(",") if c.strip()) if scope_env else None
+    if scope is not None:
+        def _in_scope(sublabel):
+            cat = sublabel.split("/", 1)[0].strip() if "/" in sublabel else sublabel.strip()
+            return cat in scope
+        allowed = {s: sl for s, sl in allowed.items() if _in_scope(sl)}
+        disallowed = {s: sl for s, sl in disallowed.items() if _in_scope(sl)}
+        print(f"Scope filter active: only categories {sorted(scope)}")
+
     print(f"Allowed senders: {len(allowed)}")
     print(f"Disallowed senders: {len(disallowed)}")
     if dry_run:
