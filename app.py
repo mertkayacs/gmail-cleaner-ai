@@ -92,7 +92,7 @@ def run_subcommand(cmd, args, status_placeholder):
         "LLM_MODEL", "LLM_BASE_URL", "OLLAMA_HOST",
         "SENDER_BATCH_SIZE", "TOP_SENDER_CAP", "FETCH_BATCH_SIZE",
         "CLASSIFY_MODE", "BODY_LINES",
-        "SENDERS",
+        "SENDERS", "CATEGORY_SOURCE",
     ]
     for key in passthrough:
         if key in st.session_state and st.session_state[key]:
@@ -582,6 +582,46 @@ with st.container(border=True):
     classify_disabled = not inv_path.exists()
     st.markdown(f"**classify.** Top senders sent to `{model or 'default model'}`.")
 
+    # Category source selector. Determines the schema the LLM classifies into.
+    _src_labels = {
+        "preset": "preset (built-in 12 categories, fast)",
+        "llm_generated": "llm-generated (one extra LLM call drafts categories for this inbox)",
+        "none": "none (binary keep / trash, simplest)",
+    }
+    _src_keys = list(_src_labels.keys())
+    category_source = st.selectbox(
+        "category source",
+        _src_keys,
+        index=_src_keys.index(st.session_state.get("CATEGORY_SOURCE", "preset")
+                              if st.session_state.get("CATEGORY_SOURCE") in _src_keys
+                              else "preset"),
+        format_func=lambda k: _src_labels[k],
+        key="CATEGORY_SOURCE",
+    )
+
+    # llm_generated needs an extra step: draft categories from top senders,
+    # save to data/<account>/categories.json, then classify uses those.
+    _cats_file = acc_dir / "categories.json"
+    if category_source == "llm_generated":
+        if _cats_file.exists():
+            try:
+                _cats_data = json.loads(_cats_file.read_text())
+                _cat_names = ", ".join(c.get("name", "?") for c in _cats_data.get("categories", []))
+                st.caption(f"Custom categories: {_cat_names} (drafted {file_age(_cats_file)})")
+            except Exception:
+                st.caption("categories.json present but unreadable.")
+        else:
+            st.caption("No custom categories yet. Click 'draft categories' to generate them from your top senders.")
+        if st.button("draft categories", disabled=not inv_path.exists(), key="btn_draft_cats"):
+            with st.status("Drafting categories from top 50 senders...", expanded=True) as status:
+                rc, _ = run_subcommand("propose-categories", [account], st.empty())
+                status.update(
+                    label="Categories drafted." if rc == 0 else f"Drafting failed (exit {rc}).",
+                    state="complete" if rc == 0 else "error",
+                    expanded=rc != 0,
+                )
+            st.rerun()
+
     # Mode selector. Determines what evidence per sender goes to the LLM.
     _mode_labels = {
         "sender_subject": "sender + sample subjects (default, balanced)",
@@ -627,9 +667,18 @@ with st.container(border=True):
         with st.expander("preview the prompt"):
             _sample_pairs = inv.get("top_senders", [])[:2]
             _sample_subj = inv.get("sample_subjects", {})
+            _custom_cats = None
+            if category_source == "llm_generated" and _cats_file.exists():
+                try:
+                    _custom_cats = json.loads(_cats_file.read_text()).get("categories", [])
+                except Exception:
+                    pass
             if _sample_pairs:
                 _sample_prompt = build_classification_prompt(
-                    _sample_pairs, _sample_subj, mode=classify_mode
+                    _sample_pairs, _sample_subj,
+                    mode=classify_mode,
+                    category_source=category_source,
+                    custom_categories=_custom_cats,
                 )
                 st.code(_sample_prompt, language="text")
             else:

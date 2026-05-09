@@ -43,6 +43,7 @@ FETCH_BATCH_SIZE = int(os.environ.get("FETCH_BATCH_SIZE", "500"))     # IMAP fet
 CLASSIFY_MODE = os.environ.get("CLASSIFY_MODE", "sender_subject")     # sender_only | sender_subject | sender_subject_body
 BODY_LINES = int(os.environ.get("BODY_LINES", "5"))                   # body lines per sample mail (mode 3 only)
 BODY_SAMPLES_PER_SENDER = 3                                           # how many sample mails per top sender to fetch body for
+CATEGORY_SOURCE = os.environ.get("CATEGORY_SOURCE", "preset")         # preset | llm_generated | none
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
 TRASH_FOLDER = '"[Gmail]/Trash"'
 
@@ -288,15 +289,20 @@ def cmd_inventory(account_email):
 
 # -------------------- Analyze -------------------------------------------------
 
-def build_classification_prompt(batch_pairs, samples, mode="sender_subject"):
+def build_classification_prompt(batch_pairs, samples, mode="sender_subject",
+                                 category_source="preset", custom_categories=None):
     """Build the classification prompt for one batch.
 
     mode controls how much evidence per sender goes to the LLM:
       - sender_only: just sender email + mail count
       - sender_subject: sender + count + 3 sample subjects (default)
       - sender_subject_body: sender + count + 3 sample subjects + body excerpts
-        (excerpts must already exist in samples under the 'body' key per sender;
-        body fetch happens in the inventory step.)
+
+    category_source controls the category schema:
+      - preset (default): built-in 12-category list with hardcoded rules
+      - llm_generated: use custom_categories (list of {name, description, disposition})
+        previously drafted by cmd_propose_categories
+      - none: binary keep | trash output (mapped to keep_other / junk_other downstream)
     """
     items = []
     for sender, count in batch_pairs:
@@ -316,28 +322,74 @@ def build_classification_prompt(batch_pairs, samples, mode="sender_subject"):
     else:
         evidence_line = "Senders to classify (with mail count and sample subjects):"
 
-    return textwrap.dedent("""\
-        You are classifying email senders for a personal Gmail organization system.
+    if category_source == "none":
+        instructions = textwrap.dedent("""\
+            You are sorting email senders into keep or trash for a personal Gmail.
 
-        For each sender below, decide:
-        - category: one of keep_personal, keep_work, keep_security, keep_transactional, keep_calendar, keep_newsletter, keep_other, junk_promo, junk_spam, junk_low_newsletter, junk_notification, junk_other.
-        - sublabel: a descriptive sub-label like "Personal/Family", "Work/<company>", "Newsletter/Tech", "Junk/Promo".
-        - confidence: integer 0-100.
-        - reasoning: one short sentence.
+            For each sender below, decide:
+            - action: one of "keep" or "trash".
+            - confidence: integer 0-100.
+            - reasoning: one short sentence.
 
-        Rules:
-        - keep_security covers 2FA, password resets, security alerts, bank security, government auth.
-        - keep_transactional covers receipts, invoices, shipping confirmations, order confirmations.
-        - junk_promo is marketing, sales, discount campaigns, list-unsubscribable bulk mail with no sign of personal value.
-        - If sender is a noreply automated address with no clear value, junk_notification.
-        - If newsletter-shaped but might be useful, keep_newsletter.
-        - When in doubt, lean keep_* over junk_*. Better to keep one extra than wrongly trash important.
-        - If confidence below 70 on a junk_* category, fallback to keep_other.
+            Rules:
+            - Trash means clear spam, marketing campaigns, low-value bulk noise.
+            - Keep means anything personal, work, transactional, security, or with any sign of value.
+            - When in doubt, keep. Better to keep one extra than trash important.
+            - If confidence below 70 on trash, fall back to keep.
 
-        Output strictly as a JSON object with sender as key. Example:
-        {"foo@bar.com": {"category": "keep_work", "sublabel": "Work/Acme", "confidence": 85, "reasoning": "Recurring sender with personalized subject lines."}}
+            Output strictly as a JSON object with sender as key. Example:
+            {"foo@bar.com": {"action": "trash", "confidence": 90, "reasoning": "Marketing campaign sender with no personal value."}}
 
-        """) + evidence_line + "\n" + json.dumps(items, indent=2) + "\n\nReturn the JSON object only, no surrounding text."
+            """)
+    elif category_source == "llm_generated" and custom_categories:
+        cat_lines = []
+        for c in custom_categories:
+            name = c.get("name", "")
+            desc = c.get("description", "")
+            disp = c.get("disposition", "keep")
+            cat_lines.append(f"  - {name} ({disp}): {desc}")
+        cats_block = "\n".join(cat_lines)
+        instructions = textwrap.dedent(f"""\
+            You are classifying email senders for a personal Gmail organization system.
+
+            Use ONLY these categories (drafted earlier for this user's inbox):
+            {cats_block}
+
+            For each sender below, decide:
+            - category: exactly one of the names above.
+            - sublabel: a more specific sub-label under that category (e.g., "Newsletter/TechDigest").
+            - confidence: integer 0-100.
+            - reasoning: one short sentence.
+
+            Output strictly as a JSON object with sender as key. Example:
+            {{"foo@bar.com": {{"category": "Newsletter", "sublabel": "Newsletter/Tech", "confidence": 85, "reasoning": "Weekly tech digest with structured layout."}}}}
+
+            """)
+    else:
+        instructions = textwrap.dedent("""\
+            You are classifying email senders for a personal Gmail organization system.
+
+            For each sender below, decide:
+            - category: one of keep_personal, keep_work, keep_security, keep_transactional, keep_calendar, keep_newsletter, keep_other, junk_promo, junk_spam, junk_low_newsletter, junk_notification, junk_other.
+            - sublabel: a descriptive sub-label like "Personal/Family", "Work/<company>", "Newsletter/Tech", "Junk/Promo".
+            - confidence: integer 0-100.
+            - reasoning: one short sentence.
+
+            Rules:
+            - keep_security covers 2FA, password resets, security alerts, bank security, government auth.
+            - keep_transactional covers receipts, invoices, shipping confirmations, order confirmations.
+            - junk_promo is marketing, sales, discount campaigns, list-unsubscribable bulk mail with no sign of personal value.
+            - If sender is a noreply automated address with no clear value, junk_notification.
+            - If newsletter-shaped but might be useful, keep_newsletter.
+            - When in doubt, lean keep_* over junk_*. Better to keep one extra than wrongly trash important.
+            - If confidence below 70 on a junk_* category, fallback to keep_other.
+
+            Output strictly as a JSON object with sender as key. Example:
+            {"foo@bar.com": {"category": "keep_work", "sublabel": "Work/Acme", "confidence": 85, "reasoning": "Recurring sender with personalized subject lines."}}
+
+            """)
+
+    return instructions + evidence_line + "\n" + json.dumps(items, indent=2) + "\n\nReturn the JSON object only, no surrounding text."
 
 
 def cmd_analyze(account_email):
@@ -375,19 +427,45 @@ def cmd_analyze(account_email):
     api_base_note = f" via {classifier.api_base}" if classifier.api_base else ""
     print(f"Using model: {classifier.model}{api_base_note}")
 
+    # Load custom categories if user picked llm_generated source.
+    custom_categories = None
+    if CATEGORY_SOURCE == "llm_generated":
+        cats_file = out_dir / "categories.json"
+        if cats_file.exists():
+            try:
+                custom_categories = json.loads(cats_file.read_text()).get("categories", [])
+            except Exception as e:
+                print(f"Could not load categories.json: {e}. Falling back to preset.")
+        else:
+            print(f"No categories.json at {cats_file}. Falling back to preset.")
+
     all_classifications = {}
     n_batches = (len(top_senders) + SENDER_BATCH_SIZE - 1) // SENDER_BATCH_SIZE
-    print(f"Mode: {CLASSIFY_MODE}")
+    print(f"Mode: {CLASSIFY_MODE}, category source: {CATEGORY_SOURCE}")
     for i in range(0, len(top_senders), SENDER_BATCH_SIZE):
         batch = top_senders[i:i + SENDER_BATCH_SIZE]
         print(f"Classifying batch {i // SENDER_BATCH_SIZE + 1}/{n_batches} "
               f"({len(batch)} senders)...")
-        prompt = build_classification_prompt(batch, samples, mode=CLASSIFY_MODE)
+        prompt = build_classification_prompt(
+            batch, samples,
+            mode=CLASSIFY_MODE,
+            category_source=CATEGORY_SOURCE,
+            custom_categories=custom_categories,
+        )
         try:
             classifications = classifier.classify_batch(prompt)
         except Exception as e:
             print(f"  Classifier error: {e}")
             continue
+        # Normalize binary-mode output (CATEGORY_SOURCE=none) into the same
+        # downstream shape used for preset/llm_generated. action -> category.
+        if CATEGORY_SOURCE == "none":
+            for s, info in list(classifications.items()):
+                act = (info.get("action") or "").lower()
+                cat = "junk_other" if act == "trash" else "keep_other"
+                info["category"] = cat
+                info.setdefault("sublabel", "Junk/Other" if cat.startswith("junk") else "Keep/Other")
+                classifications[s] = info
         all_classifications.update(classifications)
 
     # Hybrid merge: load existing assignments and overlay new ones so senders
@@ -440,6 +518,65 @@ def cmd_analyze(account_email):
     print(f"Allowed list ({len(allowed)} senders): {out_dir}/allowed.txt")
     print(f"Disallowed list ({len(disallowed)} senders): {out_dir}/disallowed.txt")
     print("\nReview and edit allowed.txt and disallowed.txt before running `apply`.")
+
+
+def cmd_propose_categories(account_email):
+    """Draft a per-user category schema by feeding top senders to the LLM.
+    Saves data/<account>/categories.json. Used when CATEGORY_SOURCE=llm_generated.
+    """
+    out_dir = DATA_DIR / account_email
+    inv_path = out_dir / "inventory.json"
+    if not inv_path.exists():
+        raise SystemExit(f"No inventory at {inv_path}. Run `inventory` first.")
+    inventory = json.loads(inv_path.read_text())
+    top_senders = inventory.get("top_senders", [])[:50]
+    if not top_senders:
+        raise SystemExit("Inventory has no top senders to propose categories from.")
+
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+    from lib.classifier import get_classifier
+    classifier = get_classifier()
+    print(f"Drafting categories from top {len(top_senders)} senders using {classifier.model}...")
+
+    senders_block = "\n".join(f"  - {s} ({c} mails)" for s, c in top_senders)
+    prompt = textwrap.dedent(f"""\
+        You are designing a category schema for a personal Gmail inbox cleanup tool.
+
+        Look at this user's top 50 senders (with mail counts):
+        {senders_block}
+
+        Propose 5 to 10 categories that cover these senders well. For each:
+        - name: short label like "Newsletter", "Work", "Junk/Promo", "Security"
+        - description: one sentence explaining what belongs there
+        - disposition: one of "keep", "trash", or "decide-per-sender"
+
+        Output strictly as JSON:
+        {{"categories": [{{"name": "...", "description": "...", "disposition": "keep"}}, ...]}}
+
+        Return JSON only, no surrounding text.
+        """)
+    try:
+        result = classifier.classify_batch(prompt)
+    except Exception as e:
+        raise SystemExit(f"Classifier error: {e}")
+
+    # classify_batch returns dict; the proposal is wrapped in "categories" key.
+    categories = result.get("categories") if isinstance(result, dict) else None
+    if not categories:
+        raise SystemExit(f"No categories returned. Raw output: {result}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cats_file = out_dir / "categories.json"
+    cats_file.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "model": classifier.model,
+        "from_n_senders": len(top_senders),
+        "categories": categories,
+    }, indent=2))
+    print(f"Saved {len(categories)} categories to {cats_file}")
+    for c in categories:
+        print(f"  - {c.get('name')} ({c.get('disposition')}): {c.get('description')}")
 
 
 # -------------------- Apply ---------------------------------------------------
@@ -622,6 +759,9 @@ def main():
     p_ex = sub.add_parser("export-filters", help="Emit Gmail filter XML for one-time import")
     p_ex.add_argument("account", help="Gmail account email")
 
+    p_pc = sub.add_parser("propose-categories", help="Draft a per-user category schema via LLM (writes categories.json)")
+    p_pc.add_argument("account", help="Gmail account email")
+
     args = parser.parse_args()
     if args.cmd == "inventory":
         cmd_inventory(args.account)
@@ -631,6 +771,8 @@ def main():
         cmd_apply(args.account, dry_run=args.dry_run)
     elif args.cmd == "export-filters":
         cmd_export_filters(args.account)
+    elif args.cmd == "propose-categories":
+        cmd_propose_categories(args.account)
 
 
 if __name__ == "__main__":
