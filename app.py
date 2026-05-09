@@ -973,3 +973,94 @@ with st.container(border=True):
             mime="application/xml",
             use_container_width=True,
         )
+
+    # ---- settings.xml export + import ----
+    st.markdown("")
+    st.markdown(
+        "**settings.xml.** Bundle your classify config (mode, category source, "
+        "batch sizes, custom categories if any) into one file. Re-import on a "
+        "new machine to skip re-configuration."
+    )
+
+    def _build_settings_xml():
+        from xml.sax.saxutils import escape as _xe
+        from datetime import datetime as _dt, timezone as _tz
+        parts = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<gmail-cleaner-ai-settings>',
+            f'  <generated_at>{_dt.now(_tz.utc).isoformat()}</generated_at>',
+            '  <classify>',
+            f'    <mode>{_xe(str(st.session_state.get("CLASSIFY_MODE", "sender_subject")))}</mode>',
+            f'    <category_source>{_xe(str(st.session_state.get("CATEGORY_SOURCE", "preset")))}</category_source>',
+            f'    <body_lines>{_xe(str(st.session_state.get("BODY_LINES", "5")))}</body_lines>',
+            f'    <sender_batch_size>{_xe(str(st.session_state.get("SENDER_BATCH_SIZE", "50")))}</sender_batch_size>',
+            f'    <top_sender_cap>{_xe(str(st.session_state.get("TOP_SENDER_CAP", "200")))}</top_sender_cap>',
+            f'    <fetch_batch_size>{_xe(str(st.session_state.get("FETCH_BATCH_SIZE", "500")))}</fetch_batch_size>',
+            '  </classify>',
+        ]
+        if _cats_file.exists():
+            try:
+                _cd = json.loads(_cats_file.read_text())
+                parts.append('  <categories>')
+                for _c in _cd.get("categories", []):
+                    parts.append(
+                        f'    <category name="{_xe(str(_c.get("name", "")))}"'
+                        f' description="{_xe(str(_c.get("description", "")))}"'
+                        f' disposition="{_xe(str(_c.get("disposition", "keep")))}"/>'
+                    )
+                parts.append('  </categories>')
+            except Exception:
+                pass
+        parts.append('</gmail-cleaner-ai-settings>')
+        return "\n".join(parts) + "\n"
+
+    set_col_x, set_col_i = st.columns(2)
+    with set_col_x:
+        st.download_button(
+            "Export settings.xml",
+            _build_settings_xml(),
+            file_name="gmail-cleaner-ai-settings.xml",
+            mime="application/xml",
+            use_container_width=True,
+        )
+    with set_col_i:
+        _imp = st.file_uploader(
+            "Import settings.xml", type=["xml"], label_visibility="collapsed",
+            key="settings_uploader",
+        )
+        if _imp is not None and st.button("Apply imported settings", key="btn_apply_settings"):
+            try:
+                import xml.etree.ElementTree as ET
+                _root = ET.fromstring(_imp.getvalue())
+                _classify = _root.find("classify")
+                if _classify is not None:
+                    for _tag, _key in [
+                        ("mode", "CLASSIFY_MODE"),
+                        ("category_source", "CATEGORY_SOURCE"),
+                        ("body_lines", "BODY_LINES"),
+                        ("sender_batch_size", "SENDER_BATCH_SIZE"),
+                        ("top_sender_cap", "TOP_SENDER_CAP"),
+                        ("fetch_batch_size", "FETCH_BATCH_SIZE"),
+                    ]:
+                        _el = _classify.find(_tag)
+                        if _el is not None and _el.text:
+                            st.session_state[_key] = _el.text.strip()
+                _cats_xml = _root.find("categories")
+                if _cats_xml is not None:
+                    _cats_list = []
+                    for _c in _cats_xml.findall("category"):
+                        _cats_list.append({
+                            "name": _c.attrib.get("name", ""),
+                            "description": _c.attrib.get("description", ""),
+                            "disposition": _c.attrib.get("disposition", "keep"),
+                        })
+                    if _cats_list:
+                        acc_dir.mkdir(parents=True, exist_ok=True)
+                        _cats_file.write_text(json.dumps({
+                            "imported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "categories": _cats_list,
+                        }, indent=2))
+                st.success("Settings applied.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not parse settings.xml: {e}")
