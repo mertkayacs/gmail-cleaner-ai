@@ -45,3 +45,32 @@ def test_extract_text_excerpt_handles_plain_and_html():
     out = triage.extract_text_excerpt(html, n_lines=2)
     assert "Hello" in out
     assert "<" not in out  # tags stripped
+
+
+def test_is_security_sender_flags_otp_and_security_paths():
+    """Body excerpts go to the LLM in mode 3. Senders likely to send OTPs,
+    password resets, or security alerts must be flagged so we never fetch
+    their bodies."""
+    flagged = [
+        "noreply@google.com",
+        "no-reply@apple.com",
+        "security-noreply@github.com",
+        "verify@stripe.com",
+        "verification@bank.com",
+        "2fa@example.com",
+        "otp@example.com",
+        "mfa@x.com",
+        "password-reset@x.com",
+        "login@accounts.google.com",
+    ]
+    for s in flagged:
+        assert triage.is_security_sender(s), f"{s} should be flagged"
+
+    safe = [
+        "alice@example.com",
+        "newsletter@digest.com",
+        "support@vendor.com",  # generic, not flagged
+        "author@blog.com",      # contains 'auth' but only as substring of 'author'
+    ]
+    for s in safe:
+        assert not triage.is_security_sender(s), f"{s} should NOT be flagged"

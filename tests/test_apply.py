@@ -166,3 +166,49 @@ def test_apply_summary_reports_failure_count(fake_account, monkeypatch, capsys):
     out = capsys.readouterr().out
     # Two senders, both fail STORE -> at least 2 failures
     assert "failure" in out.lower() or "failed" in out.lower()
+
+
+def test_apply_log_persists_on_crash_mid_loop(fake_account, monkeypatch):
+    """When apply crashes mid-loop (Ctrl-C / network drop), already-processed
+    senders must still be in applied.log on disk. Previously the log was
+    written once at the end; a crash lost everything."""
+    acc, acc_dir = fake_account
+    # Add a third sender so we can crash on the second action and still have
+    # one line written before and one after had the bug not been fixed.
+    (acc_dir / "disallowed.txt").write_text(
+        "# header\n"
+        "spam-a@example.com | Junk/Promo | a\n"
+        "spam-b@example.com | Junk/Promo | b\n"
+    )
+    monkeypatch.delenv("APPLY_CATEGORIES", raising=False)
+
+    conn = MagicMock()
+    conn.select.return_value = ("OK", [b""])
+    conn.logout.return_value = ("BYE", [b""])
+
+    call_state = {"store_calls": 0}
+
+    def uid_side_effect(*args, **kwargs):
+        op = args[0]
+        if op == "SEARCH":
+            return ("OK", [b"1"])
+        if op == "STORE":
+            call_state["store_calls"] += 1
+            if call_state["store_calls"] >= 2:
+                raise KeyboardInterrupt("simulated Ctrl-C mid-apply")
+            return ("OK", [b""])
+        if op == "MOVE":
+            return ("OK", [b""])
+        return ("OK", [b""])
+
+    conn.uid.side_effect = uid_side_effect
+    monkeypatch.setattr(triage, "imap_connect", lambda *a, **kw: conn)
+
+    with pytest.raises(KeyboardInterrupt):
+        triage.cmd_apply(acc, dry_run=False)
+
+    log_text = (acc_dir / "applied.log").read_text()
+    # The first sender's TRASH line must already be on disk despite the crash.
+    assert "TRASH" in log_text or "KEEP" in log_text, (
+        f"First sender's action lost on crash. Log:\n{log_text}"
+    )

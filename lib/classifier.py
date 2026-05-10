@@ -26,9 +26,14 @@ LiteLLM docs: https://docs.litellm.ai/docs/providers
 import json
 import os
 import re
+import time
 
 # Disable LiteLLM's anonymous telemetry by default. Privacy preference.
 os.environ.setdefault("LITELLM_TELEMETRY", "False")
+
+# Retry budget for classify_batch. One transient API error otherwise drops a
+# whole sender batch silently from the output (~50 senders).
+MAX_RETRIES = 3
 
 
 def _extract_json(text):
@@ -65,9 +70,18 @@ class Classifier:
         }
         if self.api_base:
             kwargs["api_base"] = self.api_base
-        resp = self._completion(**kwargs)
-        text = resp.choices[0].message.content or ""
-        return _extract_json(text)
+
+        last_err = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = self._completion(**kwargs)
+                text = resp.choices[0].message.content or ""
+                return _extract_json(text)
+            except Exception as e:
+                last_err = e
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(2 ** attempt)
+        raise last_err
 
 
 def get_classifier(model=None, api_base=None) -> Classifier:

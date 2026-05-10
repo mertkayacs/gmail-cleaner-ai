@@ -47,6 +47,29 @@ CATEGORY_SOURCE = os.environ.get("CATEGORY_SOURCE", "preset")         # preset |
 ALL_MAIL_FOLDER = '"[Gmail]/All Mail"'
 TRASH_FOLDER = '"[Gmail]/Trash"'
 
+# Senders we never fetch bodies for in mode 3. The first lines of these mails
+# are typically OTPs, password reset codes, security alerts, and 2FA prompts.
+# Even if Mert trusts the LLM provider, sending OTP-shaped strings widens the
+# privacy footprint silently. \b boundaries avoid matching 'author' for 'auth'.
+_SECURITY_PATTERNS = (
+    r"noreply",
+    r"no-reply",
+    r"\bsecurity\b",
+    r"\bverify\b",
+    r"\bverification\b",
+    r"\bauth\b",
+    r"\b2fa\b",
+    r"\botp\b",
+    r"\bmfa\b",
+    r"password",
+    r"accounts\.google\.com",
+)
+_SECURITY_RX = re.compile("|".join(_SECURITY_PATTERNS), re.IGNORECASE)
+
+
+def is_security_sender(addr):
+    return bool(_SECURITY_RX.search(addr or ""))
+
 
 # -------------------- Account loading -----------------------------------------
 
@@ -70,7 +93,8 @@ def load_account(account_email):
 # -------------------- IMAP helpers --------------------------------------------
 
 def imap_connect(email_addr, password):
-    conn = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+    # 60s socket timeout so a network hang fails fast instead of stalling forever.
+    conn = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=60)
     conn.login(email_addr, password)
     return conn
 
@@ -211,12 +235,19 @@ def cmd_inventory(account_email):
         # Pass 2 (mode 3 only): fetch body excerpts for top senders' sample UIDs.
         # Skipped entirely for sender_only and sender_subject so privacy and speed
         # are unchanged for the default flow.
+        # Security-pattern senders are skipped even in mode 3 because their first
+        # body lines typically contain OTPs, password reset codes, or 2FA prompts.
         sample_bodies = {}
         if CLASSIFY_MODE == "sender_subject_body":
             top_for_body = [s for s, _ in senders.most_common(TOP_SENDER_CAP)]
+            skipped = sum(1 for s in top_for_body if is_security_sender(s))
             print(f"Mode {CLASSIFY_MODE}: fetching body excerpts for "
-                  f"{len(top_for_body)} top senders ({BODY_LINES} lines each)...")
+                  f"{len(top_for_body) - skipped} top senders "
+                  f"({BODY_LINES} lines each), skipping {skipped} "
+                  f"security-pattern senders.")
             for j, sender in enumerate(top_for_body):
+                if is_security_sender(sender):
+                    continue
                 uids_for_sender = sender_uids.get(sender, [])
                 if not uids_for_sender:
                     continue
@@ -715,82 +746,81 @@ def cmd_apply(account_email, dry_run):
 
     email_addr, password = load_account(account_email)
     conn = imap_connect(email_addr, password)
-    log_lines = []
-    log_lines.append(f"# Apply log: {email_addr}")
-    log_lines.append(f"# {datetime.now(timezone.utc).isoformat()}")
-    log_lines.append(f"# dry_run: {dry_run}")
-    log_lines.append("")
 
-    failures = 0
-
-    def _record(msg):
-        print(msg)
-        log_lines.append(msg)
-
-    try:
-        typ, _ = conn.select(ALL_MAIL_FOLDER)
-        if typ != "OK":
-            raise SystemExit(f"Could not select {ALL_MAIL_FOLDER}: {typ}")
-
-        # Apply labels for allowed senders.
-        # X-GM-RAW with `from:exact@addr` uses Gmail's search engine for
-        # address-token exact match. Plain IMAP FROM is substring, which
-        # would let `info@example.com` also match `info@example.com.attacker`.
-        for sender, sublabel in sorted(allowed.items()):
-            if not sublabel:
-                continue
-            typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
-            if typ != "OK":
-                _record(f"  ERR SEARCH {sender}: {typ}")
-                failures += 1
-                continue
-            uids = data[0].split()
-            if not uids:
-                continue
-            uid_set = b",".join(uids).decode()
-            _record(f"  KEEP {sender} ({len(uids)} mails) -> label '{sublabel}'")
-            if not dry_run:
-                typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{sublabel}")')
-                if typ != "OK":
-                    _record(f"  ERR STORE failed for {sender}: {typ}")
-                    failures += 1
-
-        # Move disallowed senders to Trash
-        for sender, sublabel in sorted(disallowed.items()):
-            typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
-            if typ != "OK":
-                _record(f"  ERR SEARCH {sender}: {typ}")
-                failures += 1
-                continue
-            uids = data[0].split()
-            if not uids:
-                continue
-            uid_set = b",".join(uids).decode()
-            label_to_apply = sublabel or "Junk/Other"
-            _record(f"  TRASH {sender} ({len(uids)} mails) -> label '{label_to_apply}', move to Trash")
-            if not dry_run:
-                typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{label_to_apply}")')
-                if typ != "OK":
-                    _record(f"  ERR STORE failed for {sender}: {typ}")
-                    failures += 1
-                    continue  # don't move if labelling failed
-                typ, _ = conn.uid("MOVE", uid_set, TRASH_FOLDER)
-                if typ != "OK":
-                    _record(f"  ERR MOVE to Trash failed for {sender}: {typ}")
-                    failures += 1
-    finally:
-        try:
-            conn.logout()
-        except Exception:
-            pass
-
+    out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "applied.log"
-    if log_path.exists():
-        existing = log_path.read_text()
-        log_path.write_text(existing + "\n" + "\n".join(log_lines) + "\n")
-    else:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("\n".join(log_lines) + "\n")
+
+    # Open the log in append mode for the duration of the apply. _record writes
+    # per-sender and flushes so a Ctrl-C, network drop, or crash leaves the log
+    # accurate up to the last completed action.
+    failures = 0
+    with log_path.open("a") as log_file:
+        log_file.write(f"\n# Apply log: {email_addr}\n")
+        log_file.write(f"# {datetime.now(timezone.utc).isoformat()}\n")
+        log_file.write(f"# dry_run: {dry_run}\n\n")
+        log_file.flush()
+
+        def _record(msg):
+            print(msg)
+            log_file.write(msg + "\n")
+            log_file.flush()
+
+        try:
+            typ, _ = conn.select(ALL_MAIL_FOLDER)
+            if typ != "OK":
+                raise SystemExit(f"Could not select {ALL_MAIL_FOLDER}: {typ}")
+
+            # Apply labels for allowed senders.
+            # X-GM-RAW with `from:exact@addr` uses Gmail's search engine for
+            # address-token exact match. Plain IMAP FROM is substring, which
+            # would let `info@example.com` also match `info@example.com.attacker`.
+            for sender, sublabel in sorted(allowed.items()):
+                if not sublabel:
+                    continue
+                typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
+                if typ != "OK":
+                    _record(f"  ERR SEARCH {sender}: {typ}")
+                    failures += 1
+                    continue
+                uids = data[0].split()
+                if not uids:
+                    continue
+                uid_set = b",".join(uids).decode()
+                _record(f"  KEEP {sender} ({len(uids)} mails) -> label '{sublabel}'")
+                if not dry_run:
+                    typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{sublabel}")')
+                    if typ != "OK":
+                        _record(f"  ERR STORE failed for {sender}: {typ}")
+                        failures += 1
+
+            # Move disallowed senders to Trash
+            for sender, sublabel in sorted(disallowed.items()):
+                typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
+                if typ != "OK":
+                    _record(f"  ERR SEARCH {sender}: {typ}")
+                    failures += 1
+                    continue
+                uids = data[0].split()
+                if not uids:
+                    continue
+                uid_set = b",".join(uids).decode()
+                label_to_apply = sublabel or "Junk/Other"
+                _record(f"  TRASH {sender} ({len(uids)} mails) -> label '{label_to_apply}', move to Trash")
+                if not dry_run:
+                    typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{label_to_apply}")')
+                    if typ != "OK":
+                        _record(f"  ERR STORE failed for {sender}: {typ}")
+                        failures += 1
+                        continue  # don't move if labelling failed
+                    typ, _ = conn.uid("MOVE", uid_set, TRASH_FOLDER)
+                    if typ != "OK":
+                        _record(f"  ERR MOVE to Trash failed for {sender}: {typ}")
+                        failures += 1
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
 
     summary = "Dry run complete" if dry_run else "Apply complete"
     if failures:
