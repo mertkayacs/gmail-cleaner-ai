@@ -194,6 +194,40 @@ def section_heading(text: str):
     )
 
 
+def estimate_classify_cost(model: str, sample_prompt: str, n_batches: int) -> str:
+    """Best-effort $ estimate for a classify run, rendered as a caption.
+
+    Uses LiteLLM's token_counter and model_cost. Returns "" when the model
+    has no known pricing (Ollama, LM Studio, custom local servers) so the
+    caller can suppress the line entirely."""
+    try:
+        from litellm import token_counter, model_cost
+    except Exception:
+        return ""
+    try:
+        in_per = token_counter(model=model, text=sample_prompt)
+    except Exception:
+        return ""
+    in_total = in_per * n_batches
+    # Output JSON is short relative to input. ~800 tokens per batch is a
+    # generous upper bound for the schema we ask for.
+    out_total = 800 * n_batches
+    info = model_cost.get(model) or {}
+    in_rate = info.get("input_cost_per_token")
+    out_rate = info.get("output_cost_per_token")
+    if in_rate is None or out_rate is None:
+        return (
+            f"≈ {in_total:,} input tokens across {n_batches} call"
+            f"{'s' if n_batches != 1 else ''}; cost estimate unavailable "
+            f"for `{model}`."
+        )
+    total = in_total * in_rate + out_total * out_rate
+    return (
+        f"≈ ${total:.4f} estimated "
+        f"({in_total:,} input + ~{out_total:,} output tokens)."
+    )
+
+
 PRESETS = {
     "Anthropic (Claude)": {
         "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
@@ -665,22 +699,32 @@ with st.container(border=True):
             f"≈ `{_n_batches}` LLM call{'s' if _n_batches != 1 else ''}. "
             f"Adjust batch size in Setup → advanced (batch sizes)."
         )
+
+        # Build sample prompt once; reused for cost estimate and preview.
+        _sample_pairs = inv.get("top_senders", [])[:2]
+        _sample_subj = inv.get("sample_subjects", {})
+        _custom_cats = None
+        if category_source == "llm_generated" and _cats_file.exists():
+            try:
+                _custom_cats = json.loads(_cats_file.read_text()).get("categories", [])
+            except Exception:
+                pass
+        _sample_prompt = ""
+        if _sample_pairs:
+            _sample_prompt = build_classification_prompt(
+                _sample_pairs, _sample_subj,
+                mode=classify_mode,
+                category_source=category_source,
+                custom_categories=_custom_cats,
+            )
+
+        if _sample_prompt and model:
+            _cost_caption = estimate_classify_cost(model, _sample_prompt, _n_batches)
+            if _cost_caption:
+                st.caption(_cost_caption)
+
         with st.expander("preview the prompt"):
-            _sample_pairs = inv.get("top_senders", [])[:2]
-            _sample_subj = inv.get("sample_subjects", {})
-            _custom_cats = None
-            if category_source == "llm_generated" and _cats_file.exists():
-                try:
-                    _custom_cats = json.loads(_cats_file.read_text()).get("categories", [])
-                except Exception:
-                    pass
-            if _sample_pairs:
-                _sample_prompt = build_classification_prompt(
-                    _sample_pairs, _sample_subj,
-                    mode=classify_mode,
-                    category_source=category_source,
-                    custom_categories=_custom_cats,
-                )
+            if _sample_prompt:
                 st.code(_sample_prompt, language="text")
             else:
                 st.caption("No senders in inventory to preview yet.")
@@ -728,7 +772,9 @@ with st.container(border=True):
         with st.expander("reset data for this account"):
             st.caption(
                 f"Deletes inventory, classification, allowed/disallowed lists, and "
-                f"filters.xml for `{account}`. The audit log (applied.log) is preserved."
+                f"filters.xml for `{account}`. The audit log (applied.log) and "
+                f"any LLM-drafted categories (categories.json) are preserved so "
+                f"a re-classify with the same schema is one click."
             )
             confirm_reset = st.checkbox(
                 "I understand this clears my classification data",
@@ -954,6 +1000,50 @@ with st.container(border=True):
         st.caption(f"Last applied {file_age(log_path)}.")
         with st.expander("audit log"):
             st.code(log_path.read_text(), language="text")
+
+    # ---- Undo last apply ----
+    # Only the most recent session is restorable. Earlier sessions may have
+    # already passed Gmail's 30-day Trash window.
+    undo_disabled = not log_path.exists()
+    with st.expander("undo last apply"):
+        st.caption(
+            "Reads the most recent apply session from the audit log and moves "
+            "those trashed senders back from Trash to All Mail. Mail older than "
+            "Gmail's 30-day Trash window is silently skipped."
+        )
+        undo_col_dry, undo_col_live = st.columns(2)
+        with undo_col_dry:
+            if st.button(
+                "Undo (preview)",
+                use_container_width=True,
+                disabled=undo_disabled,
+                key="btn_undo_dry",
+            ):
+                with st.status(f"Previewing undo on {account}...", expanded=True) as status:
+                    rc, _ = run_subcommand("undo", [account, "--dry-run"], st.empty())
+                    status.update(
+                        label="Preview done." if rc == 0 else f"Preview failed (exit {rc}).",
+                        state="complete" if rc == 0 else "error",
+                        expanded=rc != 0,
+                    )
+        with undo_col_live:
+            confirm_undo = st.checkbox(
+                "I understand: this moves mail from Trash back to All Mail",
+                key="confirm_undo",
+            )
+            if st.button(
+                "Undo LIVE",
+                use_container_width=True,
+                disabled=undo_disabled or not confirm_undo,
+                key="btn_undo_live",
+            ):
+                with st.status(f"Restoring on {account}...", expanded=True) as status:
+                    rc, _ = run_subcommand("undo", [account], st.empty())
+                    status.update(
+                        label="Restore done." if rc == 0 else f"Restore failed (exit {rc}).",
+                        state="complete" if rc == 0 else "error",
+                        expanded=rc != 0,
+                    )
 
     st.markdown(
         "**generate gmail filter xml.** Import once per account in Gmail Settings → Filters → Import filters. "

@@ -38,7 +38,7 @@ $ streamlit run app.py
 # Open http://localhost:8501, review the lists, click Apply.
 ```
 
-Streamlit screenshot lives in `demos/screenshot-streamlit.png` (drop yours after first run).
+A Streamlit screenshot will live in `demos/screenshot-streamlit.png` once a sanitized run has been done. See [`demos/README.md`](demos/README.md) for what to drop there.
 
 ## How it works
 

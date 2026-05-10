@@ -2,9 +2,10 @@
 """
 Gmail triage tool. Single-file Python program.
 
-Reads Gmail accounts via IMAP using App Passwords, classifies senders via the
-Anthropic API, applies labels and trash decisions back via IMAP. Per-account,
-debuggable, three subcommands: inventory, analyze, apply.
+Reads Gmail accounts via IMAP using App Passwords, classifies senders via
+LiteLLM (any supported provider, model picked in .env), applies labels and
+trash decisions back via IMAP. Per-account, debuggable. Subcommands:
+inventory, analyze, apply, export-filters, propose-categories, undo.
 
 Setup:
   1. Generate an App Password per account at myaccount.google.com/apppasswords
@@ -828,6 +829,106 @@ def cmd_apply(account_email, dry_run):
     print(f"\n{summary}. Log: {log_path}")
 
 
+# -------------------- Undo ----------------------------------------------------
+
+def parse_last_trash_actions(log_path):
+    """Return [(sender, mail_count), ...] from the most recent apply session.
+
+    Sessions are delimited by '# Apply log:' headers. Only TRASH lines from
+    the last header forward count, since older sessions may have already been
+    purged from Gmail's 30-day Trash window.
+    """
+    if not log_path.exists():
+        return []
+    text = log_path.read_text()
+    marker = "# Apply log:"
+    idx = text.rfind(marker)
+    if idx == -1:
+        return []
+    last_block = text[idx:]
+    out = []
+    for line in last_block.splitlines():
+        m = re.match(r"\s+TRASH\s+(\S+)\s+\((\d+)\s+mails?\)", line)
+        if m:
+            out.append((m.group(1), int(m.group(2))))
+    return out
+
+
+def cmd_undo(account_email, dry_run):
+    """Restore last apply's trashed mail by moving it back from Trash to All Mail.
+
+    Reads applied.log to find the senders trashed in the most recent apply
+    session, then for each one searches the Trash folder (X-GM-RAW exact
+    from:) and MOVEs the matches back to All Mail. Mail purged after Gmail's
+    30-day window is silently skipped.
+    """
+    out_dir = DATA_DIR / account_email
+    log_path = out_dir / "applied.log"
+    actions = parse_last_trash_actions(log_path)
+    if not actions:
+        raise SystemExit(
+            f"No TRASH actions in last apply session at {log_path}."
+        )
+
+    print(f"Will restore mail from {len(actions)} sender(s):")
+    for s, c in actions:
+        print(f"  {s} ({c} mails were trashed)")
+
+    if dry_run:
+        print("\nDRY RUN: no IMAP changes.")
+        return
+
+    email_addr, password = load_account(account_email)
+    conn = imap_connect(email_addr, password)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    failures = 0
+    restored = 0
+    with log_path.open("a") as log_file:
+        log_file.write(f"\n# Undo log: {email_addr}\n")
+        log_file.write(f"# {datetime.now(timezone.utc).isoformat()}\n\n")
+        log_file.flush()
+
+        def _record(msg):
+            print(msg)
+            log_file.write(msg + "\n")
+            log_file.flush()
+
+        try:
+            typ, _ = conn.select(TRASH_FOLDER)
+            if typ != "OK":
+                raise SystemExit(f"Could not select {TRASH_FOLDER}: {typ}")
+
+            for sender, _ in actions:
+                typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
+                if typ != "OK":
+                    _record(f"  ERR SEARCH (in Trash) {sender}: {typ}")
+                    failures += 1
+                    continue
+                uids = data[0].split()
+                if not uids:
+                    _record(f"  SKIP {sender}: nothing in Trash (already purged?)")
+                    continue
+                uid_set = b",".join(uids).decode()
+                typ, _ = conn.uid("MOVE", uid_set, ALL_MAIL_FOLDER)
+                if typ != "OK":
+                    _record(f"  ERR MOVE {sender} from Trash: {typ}")
+                    failures += 1
+                    continue
+                _record(f"  RESTORED {sender}: {len(uids)} mails moved back to All Mail")
+                restored += len(uids)
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+
+    summary = f"Restored {restored} mails total"
+    if failures:
+        summary += f" with {failures} failure{'s' if failures != 1 else ''}"
+    print(f"\n{summary}. Log: {log_path}")
+
+
 # -------------------- Entrypoint ----------------------------------------------
 
 def main():
@@ -839,7 +940,7 @@ def main():
     p_inv = sub.add_parser("inventory", help="Read mail metadata, compute stats")
     p_inv.add_argument("account", help="Gmail account email")
 
-    p_an = sub.add_parser("analyze", help="Classify top senders via Anthropic API")
+    p_an = sub.add_parser("analyze", help="Classify top senders via LiteLLM (any supported provider)")
     p_an.add_argument("account", help="Gmail account email")
 
     p_ap = sub.add_parser("apply", help="Apply labels and Trash via IMAP")
@@ -852,6 +953,10 @@ def main():
     p_pc = sub.add_parser("propose-categories", help="Draft a per-user category schema via LLM (writes categories.json)")
     p_pc.add_argument("account", help="Gmail account email")
 
+    p_un = sub.add_parser("undo", help="Restore last apply's trashed mail from Trash back to All Mail")
+    p_un.add_argument("account", help="Gmail account email")
+    p_un.add_argument("--dry-run", action="store_true", help="Show actions, do not modify")
+
     args = parser.parse_args()
     if args.cmd == "inventory":
         cmd_inventory(args.account)
@@ -863,6 +968,8 @@ def main():
         cmd_export_filters(args.account)
     elif args.cmd == "propose-categories":
         cmd_propose_categories(args.account)
+    elif args.cmd == "undo":
+        cmd_undo(args.account, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
