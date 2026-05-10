@@ -641,15 +641,35 @@ def build_filter_xml(assignments, account_email):
 
 
 def cmd_export_filters(account_email):
-    """Emit Gmail filter XML from the proposed_categories.json file."""
+    """Emit Gmail filter XML from the edited list files.
+
+    Reads allowed.txt and disallowed.txt rather than proposed_categories.json
+    because the user may have edited the lists in the UI after analyze ran.
+    The lists are the source of truth post-review; the JSON is a snapshot of
+    the LLM's first pass and isn't regenerated on edit.
+    """
     out_dir = DATA_DIR / account_email
-    cats_path = out_dir / "proposed_categories.json"
-    if not cats_path.exists():
-        raise SystemExit(f"No analysis at {cats_path}. Run `analyze` first.")
-    cats = json.loads(cats_path.read_text())
-    assignments = cats.get("sender_assignments", {})
+    allowed = parse_list_file(out_dir / "allowed.txt")
+    disallowed = parse_list_file(out_dir / "disallowed.txt")
+    if not allowed and not disallowed:
+        raise SystemExit(
+            f"No lists at {out_dir}. Run `analyze` first or populate "
+            f"allowed.txt and disallowed.txt."
+        )
+
+    assignments = {}
+    for sender, sublabel in allowed.items():
+        if not sublabel:
+            continue
+        assignments[sender] = {"category": "keep_other", "sublabel": sublabel}
+    for sender, sublabel in disallowed.items():
+        assignments[sender] = {
+            "category": "junk_other",
+            "sublabel": sublabel or "Junk/Other",
+        }
     if not assignments:
         raise SystemExit("No sender assignments to export.")
+
     xml = build_filter_xml(assignments, account_email)
     out_path = out_dir / "filters.xml"
     out_path.write_text(xml)
@@ -668,12 +688,17 @@ def cmd_apply(account_email, dry_run):
     if not allowed and not disallowed:
         raise SystemExit("Run `analyze` first or populate allowed.txt and disallowed.txt.")
 
-    # Optional scope filter: APPLY_CATEGORIES env var (comma-separated category
-    # prefixes, e.g. 'Newsletter,Junk'). When set, only senders whose sublabel
-    # category-part matches one of these are acted on. Empty/unset = act on all.
+    # Optional scope filter: APPLY_CATEGORIES env var.
+    #   unset / empty -> no filter, process all
+    #   "__NONE__"    -> user explicitly unchecked everything in UI: no-op
+    #   "Cat1,Cat2"   -> only senders whose sublabel category-part matches
     scope_env = os.environ.get("APPLY_CATEGORIES", "").strip()
-    scope = set(c.strip() for c in scope_env.split(",") if c.strip()) if scope_env else None
-    if scope is not None:
+    if scope_env == "__NONE__":
+        print("Scope filter: nothing selected. No-op.")
+        allowed = {}
+        disallowed = {}
+    elif scope_env:
+        scope = set(c.strip() for c in scope_env.split(",") if c.strip())
         def _in_scope(sublabel):
             cat = sublabel.split("/", 1)[0].strip() if "/" in sublabel else sublabel.strip()
             return cat in scope
@@ -696,44 +721,63 @@ def cmd_apply(account_email, dry_run):
     log_lines.append(f"# dry_run: {dry_run}")
     log_lines.append("")
 
+    failures = 0
+
+    def _record(msg):
+        print(msg)
+        log_lines.append(msg)
+
     try:
         typ, _ = conn.select(ALL_MAIL_FOLDER)
         if typ != "OK":
             raise SystemExit(f"Could not select {ALL_MAIL_FOLDER}: {typ}")
 
-        # Apply labels for allowed senders
+        # Apply labels for allowed senders.
+        # X-GM-RAW with `from:exact@addr` uses Gmail's search engine for
+        # address-token exact match. Plain IMAP FROM is substring, which
+        # would let `info@example.com` also match `info@example.com.attacker`.
         for sender, sublabel in sorted(allowed.items()):
             if not sublabel:
                 continue
-            typ, data = conn.uid("SEARCH", None, "FROM", f'"{sender}"')
+            typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
             if typ != "OK":
+                _record(f"  ERR SEARCH {sender}: {typ}")
+                failures += 1
                 continue
             uids = data[0].split()
             if not uids:
                 continue
             uid_set = b",".join(uids).decode()
-            msg = f"  KEEP {sender} ({len(uids)} mails) -> label '{sublabel}'"
-            print(msg)
-            log_lines.append(msg)
+            _record(f"  KEEP {sender} ({len(uids)} mails) -> label '{sublabel}'")
             if not dry_run:
-                conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{sublabel}")')
+                typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{sublabel}")')
+                if typ != "OK":
+                    _record(f"  ERR STORE failed for {sender}: {typ}")
+                    failures += 1
 
         # Move disallowed senders to Trash
         for sender, sublabel in sorted(disallowed.items()):
-            typ, data = conn.uid("SEARCH", None, "FROM", f'"{sender}"')
+            typ, data = conn.uid("SEARCH", None, "X-GM-RAW", f'"from:{sender}"')
             if typ != "OK":
+                _record(f"  ERR SEARCH {sender}: {typ}")
+                failures += 1
                 continue
             uids = data[0].split()
             if not uids:
                 continue
             uid_set = b",".join(uids).decode()
             label_to_apply = sublabel or "Junk/Other"
-            msg = f"  TRASH {sender} ({len(uids)} mails) -> label '{label_to_apply}', move to Trash"
-            print(msg)
-            log_lines.append(msg)
+            _record(f"  TRASH {sender} ({len(uids)} mails) -> label '{label_to_apply}', move to Trash")
             if not dry_run:
-                conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{label_to_apply}")')
-                conn.uid("MOVE", uid_set, TRASH_FOLDER)
+                typ, _ = conn.uid("STORE", uid_set, "+X-GM-LABELS", f'("{label_to_apply}")')
+                if typ != "OK":
+                    _record(f"  ERR STORE failed for {sender}: {typ}")
+                    failures += 1
+                    continue  # don't move if labelling failed
+                typ, _ = conn.uid("MOVE", uid_set, TRASH_FOLDER)
+                if typ != "OK":
+                    _record(f"  ERR MOVE to Trash failed for {sender}: {typ}")
+                    failures += 1
     finally:
         try:
             conn.logout()
@@ -748,7 +792,10 @@ def cmd_apply(account_email, dry_run):
         out_dir.mkdir(parents=True, exist_ok=True)
         log_path.write_text("\n".join(log_lines) + "\n")
 
-    print(f"\n{'Dry run complete' if dry_run else 'Apply complete'}. Log: {log_path}")
+    summary = "Dry run complete" if dry_run else "Apply complete"
+    if failures:
+        summary += f" with {failures} failure{'s' if failures != 1 else ''}"
+    print(f"\n{summary}. Log: {log_path}")
 
 
 # -------------------- Entrypoint ----------------------------------------------

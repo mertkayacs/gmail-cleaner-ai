@@ -898,13 +898,20 @@ with st.container(border=True):
                 with _cat_cols[_i % len(_cat_cols)]:
                     if st.checkbox(_cat, value=True, key=f"apply_cat_{_cat}"):
                         _selected_cats.append(_cat)
-            # Stash for run_subcommand to pick up. Empty string when all are
-            # selected = no filter (matches triage's 'unset means no filter').
+            # Stash for run_subcommand to pick up.
+            #   all selected   -> "" (matches triage 'unset = no filter')
+            #   none selected  -> "__NONE__" sentinel; without this, "" leaks through
+            #                     and triage processes every sender (real footgun
+            #                     since the destructive path defaults on)
+            #   subset         -> comma list
             if len(_selected_cats) == len(_apply_cats):
                 st.session_state["APPLY_CATEGORIES"] = ""
+            elif not _selected_cats:
+                st.session_state["APPLY_CATEGORIES"] = "__NONE__"
+                st.caption("Will act on: nothing. Apply will be a no-op.")
             else:
                 st.session_state["APPLY_CATEGORIES"] = ",".join(_selected_cats)
-                st.caption(f"Will act on: {', '.join(_selected_cats) or '(none — apply will be a no-op)'}")
+                st.caption(f"Will act on: {', '.join(_selected_cats)}")
     else:
         st.session_state["APPLY_CATEGORIES"] = ""
 
