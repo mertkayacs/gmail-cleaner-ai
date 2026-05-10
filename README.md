@@ -35,8 +35,20 @@ Classifying batch 1/4 (50 senders)...
 Allowed list (132 senders):    data/primary@gmail.com/allowed.txt
 Disallowed list (68 senders):  data/primary@gmail.com/disallowed.txt
 
+$ python3 triage.py apply primary@gmail.com --dry-run
+# Preview: prints every KEEP/TRASH action without touching Gmail.
+
+$ python3 triage.py apply primary@gmail.com
+# Live: applies labels, moves disallowed mail to Trash.
+
+$ python3 triage.py undo primary@gmail.com
+# Restores last apply's trashed senders from Trash back to All Mail.
+
+$ python3 triage.py export-filters primary@gmail.com
+# Writes filters.xml for one-time import in Gmail settings.
+
 $ streamlit run app.py
-# Open http://localhost:8501, review the lists, click Apply.
+# Or open http://localhost:8501 and do all of the above in the UI.
 ```
 
 A Streamlit screenshot will live in `demos/screenshot-streamlit.png` once a sanitized run has been done. See [`demos/README.md`](demos/README.md) for what to drop there.
@@ -165,6 +177,15 @@ What gmail-cleaner-ai is **not** good for:
 - Composing or sending mail. Read-and-organize only.
 - Setups where you cannot run Python locally.
 - Inboxes under ~500 mails. The setup overhead outweighs the cleanup.
+
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest tests/
+```
+
+23 tests in `tests/` cover the apply path (X-GM-RAW search, scope filter, STORE/MOVE error handling, crash-mid-loop log persistence), classifier retry/backoff, filters export from edited lists, header parsing, security-pattern sender skip, and undo. Add a regression test when you change behavior in `triage.py` or `lib/classifier.py`.
 
 ## Roadmap
 
