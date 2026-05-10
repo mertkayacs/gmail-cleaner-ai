@@ -32,7 +32,7 @@ from email import message_from_bytes
 from email.utils import parseaddr
 from pathlib import Path
 
-# anthropic and dotenv are lazy-imported inside the functions that need them
+# litellm and dotenv are lazy-imported inside the functions that need them
 # so that `triage.py --help` works without installing deps first.
 
 DATA_DIR = Path(__file__).parent / "data"

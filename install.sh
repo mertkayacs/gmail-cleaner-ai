@@ -52,15 +52,19 @@ Ready. Next steps:
   1. Generate a Gmail App Password per account at:
      https://myaccount.google.com/apppasswords
      (Requires 2-Step Verification on the account.)
-  2. Get your LLM API key:
+  2. Get your LLM API key. Common providers:
      - Anthropic: https://console.anthropic.com
-     - OpenAI:    https://platform.openai.com
-     - Google:    https://aistudio.google.com/apikey
+     - OpenAI:    https://platform.openai.com/api-keys
+     - Gemini:    https://aistudio.google.com/apikey
+     - Groq:      https://console.groq.com/keys
      - Ollama:    install locally from https://ollama.com (no key)
-  3. Edit .env to set LLM_PROVIDER plus the matching key, plus one or more
+     Full list of LiteLLM-supported providers in .env.example or
+     https://docs.litellm.ai/docs/providers
+  3. Edit .env to set LLM_MODEL plus the matching key, plus one or more
      GMAIL_ACCOUNT_n / GMAIL_APPPASS_n pairs.
   4. python3 triage.py inventory <account-email>
   5. python3 triage.py analyze <account-email>
   6. streamlit run app.py    # review the lists, click apply
+     Or: python3 triage.py apply <account-email> --dry-run
 
 EOF

@@ -29,7 +29,8 @@ Inventory: data/primary@gmail.com/inventory.json
 Report:    data/primary@gmail.com/report.md
 
 $ python3 triage.py analyze primary@gmail.com
-Using AnthropicClassifier (model=claude-opus-4-7)
+Using model: claude-opus-4-7
+Mode: sender_subject, category source: preset
 Classifying batch 1/4 (50 senders)...
 Allowed list (132 senders):    data/primary@gmail.com/allowed.txt
 Disallowed list (68 senders):  data/primary@gmail.com/disallowed.txt
@@ -50,7 +51,7 @@ inventory   ->  IMAP read all mail  ->  inventory.json + report.md
    |
    v
 analyze     ->  LLM classifies top senders  ->  allowed.txt + disallowed.txt
-   |              (Anthropic / OpenAI / Gemini / Ollama)
+   |              (any LiteLLM-supported provider, see customize section)
    v
 (you review the lists, edit if needed)
    |
@@ -69,7 +70,7 @@ Sender-centric: a typical inbox has a few hundred unique senders covering 90%+ o
 git clone https://github.com/mertkayacs/gmail-cleaner-ai
 cd gmail-cleaner-ai
 bash install.sh                    # checks deps, copies .env.example, installs requirements
-# edit .env: pick LLM_PROVIDER, add the matching API key, add Gmail accounts
+# edit .env: pick LLM_MODEL, add the matching API key, add Gmail accounts
 python3 triage.py inventory <first-account>
 python3 triage.py analyze <first-account>
 streamlit run app.py
@@ -108,25 +109,34 @@ The Streamlit UI ships with eleven provider presets (Anthropic, OpenAI, Gemini, 
 
 Sidebar also exposes batch sizes (sender batch, top-sender cap, IMAP fetch size) under "Advanced settings" so you can tune for very large or very small inboxes without editing code.
 
-### Add a custom provider
+### Use a different model or a custom endpoint
 
-**Add an LLM provider** in 10 lines. Implement a class extending `Classifier` in `lib/classifier.py`, register it in `PROVIDERS`, document the env vars in `.env.example`.
+You don't subclass anything. LiteLLM already speaks the provider; you just point it.
 
-```python
-# lib/classifier.py
-class MyProviderClassifier(Classifier):
-    DEFAULT_MODEL = "your-model"
-    def __init__(self, model=None, api_key=None):
-        # init your client
-        ...
-    def classify_batch(self, prompt):
-        # call your API, return parsed JSON dict
-        ...
+**Cloud provider:** set `LLM_MODEL` to any [LiteLLM-supported model name](https://docs.litellm.ai/docs/providers) and the matching key var. Example:
 
-PROVIDERS["myprovider"] = MyProviderClassifier
+```bash
+# .env
+LLM_MODEL=groq/llama-3.3-70b-versatile
+GROQ_API_KEY=gsk_...
 ```
 
-Then `LLM_PROVIDER=myprovider` in `.env` switches the whole pipeline.
+**Local OpenAI-compatible server (LM Studio, llama.cpp, vLLM):** prefix your model with `openai/` and set `LLM_BASE_URL`.
+
+```bash
+# .env
+LLM_MODEL=openai/your-model-name
+LLM_BASE_URL=http://localhost:1234/v1
+OPENAI_API_KEY=any-non-empty-string
+```
+
+**Ollama:** prefix with `ollama/`, no key needed.
+
+```bash
+# .env
+LLM_MODEL=ollama/llama3.3
+# OLLAMA_HOST=http://localhost:11434   # only if Ollama is remote
+```
 
 **Edit the taxonomy** by changing the prompt in `triage.py:build_classification_prompt`. Categories are JSON strings the LLM emits, and the apply step uses them as Gmail labels.
 
