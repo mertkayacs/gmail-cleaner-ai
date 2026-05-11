@@ -1161,3 +1161,116 @@ with st.container(border=True):
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not parse settings.xml: {e}")
+
+
+# ============== Card 5: History ==============
+
+HISTORY_FILES = ("allowed.txt", "disallowed.txt", "proposed_categories.json", "filters.xml")
+
+with st.container(border=True):
+    section_heading("history")
+    st.markdown(
+        "Snapshots of the current decision files (allowed, disallowed, categories, "
+        "filters.xml). Save before re-classifying with a different model so you can "
+        "fall back if the new run is worse. Each snapshot is a folder under "
+        "`data/<account>/history/`."
+    )
+
+    hist_dir = acc_dir / "history"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+    snaps = sorted(
+        [p for p in hist_dir.iterdir() if p.is_dir()],
+        reverse=True,
+    )
+
+    # --- Save current ---
+    save_disabled = not (allowed_path.exists() or disallowed_path.exists())
+    with st.form("history_save_form", clear_on_submit=True, border=False):
+        label_in = st.text_input(
+            "label (optional)",
+            placeholder="e.g. 'opus before sonnet re-classify'",
+            label_visibility="collapsed",
+        )
+        if st.form_submit_button(
+            "Save current as snapshot",
+            disabled=save_disabled,
+            use_container_width=True,
+            type="primary",
+        ):
+            sub_args = [account]
+            if label_in.strip():
+                sub_args += ["--label", label_in.strip()]
+            with st.status("Saving snapshot...", expanded=False) as status:
+                rc, _ = run_subcommand("history-save", sub_args, st.empty())
+                status.update(
+                    label="Saved." if rc == 0 else f"Save failed (exit {rc}).",
+                    state="complete" if rc == 0 else "error",
+                    expanded=rc != 0,
+                )
+            st.rerun()
+    if save_disabled:
+        st.caption("Nothing to save yet. Run classify first.")
+
+    # --- List ---
+    if snaps:
+        st.markdown("**snapshots**")
+        for snap in snaps:
+            files = [p.name for p in snap.iterdir() if p.name in HISTORY_FILES]
+            label_path = snap / "label.txt"
+            label = label_path.read_text().strip() if label_path.exists() else ""
+            suffix = f" — {label}" if label else ""
+            st.markdown(f"`{snap.name}`  ({len(files)} files){suffix}")
+    else:
+        st.caption("No snapshots yet.")
+
+    # --- Restore / Delete (behind expanders so the list stays the focus) ---
+    if snaps:
+        snap_ids = [s.name for s in snaps]
+
+        with st.expander("restore a snapshot"):
+            st.caption(
+                "Copies the snapshot files back into active position, overwriting "
+                "your current allowed / disallowed / categories / filters.xml. "
+                "Save the current state first if you want to keep it."
+            )
+            choice_r = st.selectbox("snapshot to restore", snap_ids, key="restore_pick")
+            confirm_r = st.checkbox(
+                "I understand this overwrites my current files",
+                key="confirm_restore",
+            )
+            if st.button(
+                "Restore",
+                disabled=not confirm_r,
+                use_container_width=True,
+                key="btn_restore_snap",
+            ):
+                with st.status(f"Restoring {choice_r}...", expanded=False) as status:
+                    rc, _ = run_subcommand("history-restore", [account, choice_r], st.empty())
+                    status.update(
+                        label="Restored." if rc == 0 else f"Restore failed (exit {rc}).",
+                        state="complete" if rc == 0 else "error",
+                        expanded=rc != 0,
+                    )
+                st.rerun()
+
+        with st.expander("delete a snapshot"):
+            st.caption("Removes the snapshot folder from disk. Cannot be undone.")
+            choice_d = st.selectbox("snapshot to delete", snap_ids, key="delete_pick")
+            confirm_d = st.checkbox(
+                "I understand this is permanent",
+                key="confirm_delete_snap",
+            )
+            if st.button(
+                "Delete snapshot",
+                disabled=not confirm_d,
+                use_container_width=True,
+                key="btn_delete_snap",
+            ):
+                with st.status(f"Deleting {choice_d}...", expanded=False) as status:
+                    rc, _ = run_subcommand("history-delete", [account, choice_d], st.empty())
+                    status.update(
+                        label="Deleted." if rc == 0 else f"Delete failed (exit {rc}).",
+                        state="complete" if rc == 0 else "error",
+                        expanded=rc != 0,
+                    )
+                st.rerun()

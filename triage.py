@@ -929,6 +929,96 @@ def cmd_undo(account_email, dry_run):
     print(f"\n{summary}. Log: {log_path}")
 
 
+# -------------------- History ------------------------------------------------
+# Snapshot the decision files (and the filter export, if it exists) into a
+# timestamped folder so a user can keep prior runs around before re-classifying
+# with a different model or after edits. Inventory is not snapshotted; it is
+# reproducible by re-scanning, and including it would balloon the snapshot size.
+
+HISTORY_FILES = (
+    "allowed.txt",
+    "disallowed.txt",
+    "proposed_categories.json",
+    "filters.xml",
+)
+
+
+def _history_dir(account_email):
+    return DATA_DIR / account_email / "history"
+
+
+def _stamp():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+
+
+def cmd_history_save(account_email, label=None):
+    acc = DATA_DIR / account_email
+    if not (acc / "allowed.txt").exists() and not (acc / "disallowed.txt").exists():
+        raise SystemExit("Nothing to snapshot. Run `analyze` first.")
+
+    snap = _history_dir(account_email) / _stamp()
+    snap.mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for name in HISTORY_FILES:
+        src = acc / name
+        if src.exists():
+            (snap / name).write_text(src.read_text())
+            copied.append(name)
+
+    if label:
+        (snap / "label.txt").write_text(label.strip() + "\n")
+
+    print(f"Snapshot: {snap.name}")
+    print(f"  files: {', '.join(copied) or '(none)'}")
+    if label:
+        print(f"  label: {label.strip()}")
+    return snap.name
+
+
+def cmd_history_list(account_email):
+    hist = _history_dir(account_email)
+    if not hist.exists():
+        print("No history yet.")
+        return
+    snaps = sorted(p for p in hist.iterdir() if p.is_dir())
+    if not snaps:
+        print("No history yet.")
+        return
+    for snap in snaps:
+        files = [p.name for p in snap.iterdir() if p.name in HISTORY_FILES]
+        label_path = snap / "label.txt"
+        label = label_path.read_text().strip() if label_path.exists() else ""
+        suffix = f"  {label}" if label else ""
+        print(f"  {snap.name}  ({len(files)} files){suffix}")
+
+
+def cmd_history_restore(account_email, snap_id):
+    snap = _history_dir(account_email) / snap_id
+    if not snap.is_dir():
+        raise SystemExit(f"Snapshot {snap_id} not found.")
+    acc = DATA_DIR / account_email
+    acc.mkdir(parents=True, exist_ok=True)
+    restored = []
+    for name in HISTORY_FILES:
+        src = snap / name
+        if src.exists():
+            (acc / name).write_text(src.read_text())
+            restored.append(name)
+    print(f"Restored from {snap_id}:")
+    print(f"  files: {', '.join(restored) or '(none)'}")
+
+
+def cmd_history_delete(account_email, snap_id):
+    snap = _history_dir(account_email) / snap_id
+    if not snap.is_dir():
+        raise SystemExit(f"Snapshot {snap_id} not found.")
+    for p in snap.iterdir():
+        p.unlink()
+    snap.rmdir()
+    print(f"Deleted snapshot {snap_id}.")
+
+
 # -------------------- Entrypoint ----------------------------------------------
 
 def main():
@@ -957,6 +1047,21 @@ def main():
     p_un.add_argument("account", help="Gmail account email")
     p_un.add_argument("--dry-run", action="store_true", help="Show actions, do not modify")
 
+    p_hs = sub.add_parser("history-save", help="Snapshot decision files + filters.xml under history/<timestamp>/")
+    p_hs.add_argument("account", help="Gmail account email")
+    p_hs.add_argument("--label", default=None, help="Optional one-line note saved with the snapshot")
+
+    p_hl = sub.add_parser("history-list", help="List saved snapshots")
+    p_hl.add_argument("account", help="Gmail account email")
+
+    p_hr = sub.add_parser("history-restore", help="Copy a snapshot back into active position (overwrites current)")
+    p_hr.add_argument("account", help="Gmail account email")
+    p_hr.add_argument("snapshot", help="Snapshot id, e.g. 2026-05-11_143045")
+
+    p_hd = sub.add_parser("history-delete", help="Delete a snapshot")
+    p_hd.add_argument("account", help="Gmail account email")
+    p_hd.add_argument("snapshot", help="Snapshot id")
+
     args = parser.parse_args()
     if args.cmd == "inventory":
         cmd_inventory(args.account)
@@ -970,6 +1075,14 @@ def main():
         cmd_propose_categories(args.account)
     elif args.cmd == "undo":
         cmd_undo(args.account, dry_run=args.dry_run)
+    elif args.cmd == "history-save":
+        cmd_history_save(args.account, label=args.label)
+    elif args.cmd == "history-list":
+        cmd_history_list(args.account)
+    elif args.cmd == "history-restore":
+        cmd_history_restore(args.account, args.snapshot)
+    elif args.cmd == "history-delete":
+        cmd_history_delete(args.account, args.snapshot)
 
 
 if __name__ == "__main__":
