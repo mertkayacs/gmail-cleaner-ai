@@ -1,5 +1,8 @@
 # gmail-cleaner-ai
 
+[![tests](https://github.com/mertkayacs/gmail-cleaner-ai/actions/workflows/test.yml/badge.svg)](https://github.com/mertkayacs/gmail-cleaner-ai/actions/workflows/test.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > Clean up multiple Gmail accounts with whichever LLM you trust.
 
 You have several Gmail accounts. Each holds thousands of mails. Most of it is marketing, automated notifications, or newsletters you stopped reading. Manually triaging each account takes hours and never finishes.
